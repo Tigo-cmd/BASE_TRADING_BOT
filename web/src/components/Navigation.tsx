@@ -35,11 +35,16 @@ export default function Navigation() {
           </div>
 
           {/* Get Started Button */}
-          <button className="hidden md:block relative group">
+          <a
+            href="https://t.me/de_base_bot"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hidden md:block relative group"
+          >
             <span className="relative z-10 bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-6 py-2.5 rounded-lg font-semibold block hover:shadow-[0_0_20px_rgba(0,212,255,0.4)] transition-all duration-300">
               Get Started
             </span>
-          </button>
+          </a>
 
           {/* Mobile Menu Button */}
           <button
@@ -58,9 +63,14 @@ export default function Navigation() {
               <a href="#about" className="text-gray-300 hover:text-cyan-400 transition-colors font-medium">About</a>
               <a href="#docs" className="text-gray-300 hover:text-cyan-400 transition-colors font-medium">Docs</a>
               <a href="#contact" className="text-gray-300 hover:text-cyan-400 transition-colors font-medium">Contact Us</a>
-              <button className="bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-6 py-2.5 rounded-lg font-semibold w-fit">
+              <a
+                href="https://t.me/de_base_bot"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-6 py-2.5 rounded-lg font-semibold w-fit inline-block"
+              >
                 Get Started
-              </button>
+              </a>
             </div>
           </div>
         )}
