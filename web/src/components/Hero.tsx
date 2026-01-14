@@ -46,10 +46,15 @@ export default function Hero() {
           network, delivering real-time insights, optimized execution, and seamless DeFi integration.
         </p>
 
-        <button className="relative group bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-10 py-4 rounded-xl font-semibold text-lg transition-all duration-300 hover:shadow-[0_0_30px_rgba(0,212,255,0.5)] hover:scale-105 mb-12">
+        <a
+          href="https://t.me/de_base_bot"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="relative group inline-block bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-10 py-4 rounded-xl font-semibold text-lg transition-all duration-300 hover:shadow-[0_0_30px_rgba(0,212,255,0.5)] hover:scale-105 mb-12"
+        >
           <span className="relative z-10">Launch Bot</span>
           <div className="absolute inset-0 bg-gradient-to-r from-cyan-400 to-purple-500 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-        </button>
+        </a>
 
         {/* Robot with floating coins */}
         <div className="relative max-w-lg mx-auto">

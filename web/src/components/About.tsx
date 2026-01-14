@@ -40,9 +40,14 @@ export default function About() {
               </p>
             </div>
 
-            <button className="relative group bg-gradient-to-r from-cyan-500 to-purple-600 text-white px-8 py-3.5 rounded-xl font-semibold transition-all duration-300 hover:shadow-[0_0_25px_rgba(0,212,255,0.4)] hover:scale-105">
+            <a
+              href="https://t.me/de_base_bot"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="relative group inline-block bg-gradient-to-r from-cyan-500 to-purple-600 text-white px-8 py-3.5 rounded-xl font-semibold transition-all duration-300 hover:shadow-[0_0_25px_rgba(0,212,255,0.4)] hover:scale-105"
+            >
               Start Trading
-            </button>
+            </a>
           </div>
         </div>
       </div>

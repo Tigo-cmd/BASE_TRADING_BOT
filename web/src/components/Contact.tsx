@@ -47,7 +47,7 @@ export default function Contact() {
 
           {/* Telegram */}
           <a
-            href="https://t.me/debase"
+            href="https://t.me/de_base_bot"
             target="_blank"
             rel="noopener noreferrer"
             className="group w-16 h-16 md:w-20 md:h-20 bg-gradient-to-br from-[#1a1f2e] to-[#0a0e17] rounded-2xl flex items-center justify-center border border-gray-700 hover:border-cyan-500/50 transition-all duration-300 hover:shadow-[0_0_30px_rgba(0,212,255,0.3)] hover:-translate-y-2"
