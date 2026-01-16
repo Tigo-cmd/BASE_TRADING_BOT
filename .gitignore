@@ -1,6 +1,45 @@
-# .gitignore
-.env           # Excludes the .env file
-*.pyc          # Excludes Python bytecode files
-__pycache__/   # Excludes Python cache directories
-*.db           # Excludes SQLite database files
-*.sqlite3      # Excludes SQLite database files
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite3
+wallet.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.toast
+.buildpath
+.project
+.settings/
+.idea/
+.vscode/
+
+# Node/Web
+node_modules/
+dist/
+.next/
+out/
+build/
+.vercel
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
