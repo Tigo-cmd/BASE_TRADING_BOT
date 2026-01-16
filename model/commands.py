@@ -15,11 +15,13 @@ from store_to_db import (
     get_referral_stats,
     get_leaderboard,
     update_user_settings,
+    get_user_settings,
     save_ai_signal,
     get_latest_ai_signals,
     create_alert,
     get_user_alerts,
-    get_trade_count
+    get_trade_count,
+    get_user_trades
 )
 from api import get_eth_price
 from telegram.helpers import escape_markdown
@@ -243,6 +245,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="wallet")]])
             await send_or_edit(update, text, reply_markup)
             context.user_data["awaiting_confirmation"] = "remove_all"
+        
+        elif query.data == "import_wallet":
+            await import_wallet_prompt(update, context)
         
         elif query.data.startswith("address_"):
             address = query.data.split("_", 1)[1]
@@ -561,12 +566,13 @@ async def CreateWallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
             short = shorten_address(w["address"])
             wallet_buttons.append([InlineKeyboardButton(f"{i}. {short}", callback_data=f"address_{w['address']}")])
     else:
-        text += "\nYou haven't created any wallets yet. Use the buttons below to generate your first trading wallet."
+        text += "\nYou haven't created any wallets yet. Use the buttons below to generate or import a wallet."
         wallet_buttons = []
 
     nav_buttons = [
         [InlineKeyboardButton("➕ Generate 1 Wallet", callback_data='Generate_wallet')],
         [InlineKeyboardButton("➕ Generate 5 Wallets", callback_data='5_wallets')],
+        [InlineKeyboardButton("📥 Import Wallet", callback_data='import_wallet')],
         [InlineKeyboardButton("🗑️ Remove All", callback_data='remove_all')],
         [InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]
     ]
@@ -854,6 +860,17 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text("❌ *Invalid address.* Please enter a valid Base contract address.")
         return
 
+    # Handle wallet import private key input
+    if context.user_data.get('awaiting_import_key'):
+        context.user_data['awaiting_import_key'] = False
+        # Delete the message containing the private key for security
+        try:
+            await update.message.delete()
+        except:
+            pass
+        await import_wallet_from_key(update, context, user_message)
+        return
+
 async def token_swap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Placeholder for token swap selection
     text = "💱 *Select Token Flow*\n\nFeature arriving in next update!"
@@ -929,7 +946,7 @@ async def AI_intelligence_command(update: Update, context: ContextTypes.DEFAULT_
     """Dashboard for AI-driven market insights."""
     ai = get_ai()
     if not ai or not ai.is_active:
-        text = "🤖 *AI Intelligence*\n\nAI services are currently offline. Please configure `GEMINI_API_KEY` to unlock real-time trends."
+        text = "🤖 *AI Intelligence*\n\nAI services are currently offline. Please configure `GROQ_API_KEY` to unlock real-time trends."
         keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start")]]
         await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
         return
@@ -1149,3 +1166,77 @@ async def look_token(update: Update, context: ContextTypes.DEFAULT_TYPE, token_a
     except Exception as e:
         print(f"ERROR in look_token: {e}")
         await loading_msg.edit_text("❌ *Lookup Error*\n\nCouldn't find this token. Check the address and try again.")
+
+async def import_wallet_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Prompts user to enter a private key to import."""
+    text = (
+        "📥 *Import Wallet*\n"
+        "━━━━━━━━━━━━━━━\n"
+        "Paste your private key below to import an existing wallet.\n\n"
+        "⚠️ *Security Notice:*\n"
+        "• Your private key is encrypted before storage\n"
+        "• Never share your private key with anyone\n"
+        "• We recommend using a dedicated trading wallet\n"
+        "━━━━━━━━━━━━━━━\n"
+        "_Send your private key now (with or without 0x prefix):_"
+    )
+    
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="wallet")]]
+    context.user_data['awaiting_import_key'] = True
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+async def import_wallet_from_key(update: Update, context: ContextTypes.DEFAULT_TYPE, private_key: str) -> None:
+    """Imports a wallet from the provided private key."""
+    from eth_account import Account
+    
+    user_id = update.effective_user.id
+    
+    try:
+        # Clean up the key
+        pk = private_key.strip()
+        if not pk.startswith('0x'):
+            pk = '0x' + pk
+        
+        # Validate and derive address
+        account = Account.from_key(pk)
+        address = account.address
+        
+        # Check if wallet already exists
+        existing = fetch_all_from_wallet(user_id)
+        if any(w['address'].lower() == address.lower() for w in existing):
+            await update.message.reply_text(
+                "⚠️ *Wallet Already Exists*\n\nThis wallet is already in your portfolio.",
+                parse_mode="Markdown"
+            )
+            return
+        
+        # Save to database
+        create_wallet_db(user_id, address, pk)
+        
+        # Get balance
+        trader = get_trader()
+        balance = 0
+        if trader:
+            balance = float(await trader.check_eth_balance(address))
+        
+        text = (
+            "✅ *Wallet Imported Successfully!*\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"📍 *Address:* `{shorten_address(address)}`\n"
+            f"💰 *Balance:* `{balance:.4f} ETH`\n"
+            "━━━━━━━━━━━━━━━\n"
+            "Your wallet is now ready for trading!"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("💳 View Wallets", callback_data="wallet")],
+            [InlineKeyboardButton("⬅️ Menu", callback_data="start")]
+        ]
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
+    except Exception as e:
+        print(f"ERROR importing wallet: {e}")
+        await update.message.reply_text(
+            "❌ *Import Failed*\n\nInvalid private key format. Please check and try again.",
+            parse_mode="Markdown"
+        )

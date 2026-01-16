@@ -78,18 +78,48 @@ class BaseFlowTrader:
         except: return Decimal(0)
 
     async def get_token_info(self, address: str) -> dict:
+        import requests
         address = Web3.to_checksum_address(address)
         c = self.w3.eth.contract(address=address, abi=ERC20_ABI)
         symbol = c.functions.symbol().call()
         name = c.functions.name().call()
         decimals = c.functions.decimals().call()
-        price = await self.get_swap_quote(self.WETH, address, Decimal("0.1"))
-        eth_p = await self.get_eth_price()
+        
+        # Try to get data from DexScreener API
+        price = 0
+        market_cap = 0
+        liquidity = 0
+        
+        try:
+            dex_url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
+            resp = requests.get(dex_url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("pairs") and len(data["pairs"]) > 0:
+                    # Get the most liquid pair
+                    pair = data["pairs"][0]
+                    price = float(pair.get("priceUsd", 0) or 0)
+                    market_cap = float(pair.get("marketCap", 0) or 0)
+                    liquidity = float(pair.get("liquidity", {}).get("usd", 0) or 0)
+        except Exception as e:
+            print(f"DexScreener API error: {e}")
+        
+        # Fallback to on-chain quote if DexScreener failed
+        if price == 0:
+            try:
+                quote = await self.get_swap_quote(self.WETH, address, Decimal("0.1"))
+                eth_p = await self.get_eth_price()
+                price = float(eth_p / (float(quote)*10)) if quote > 0 else 0
+            except:
+                pass
+        
         return {
             "name": name, "symbol": symbol, "address": address, "decimals": decimals,
-            "price": float(eth_p / (float(price)*10)) if price > 0 else 0,
-            "market_cap": 0, "liquidity": 0, "renounced": True, "frozen": False, "revoked": False,
-            "eth_ratio": float(price) * 10, "website": "", "documentation": ""
+            "price": price,
+            "market_cap": market_cap, 
+            "liquidity": liquidity, 
+            "renounced": True, "frozen": False, "revoked": False,
+            "eth_ratio": 0, "website": "", "documentation": ""
         }
 
     async def swap_eth_for_tokens(self, token_out, wallet, key, amount_eth, slippage=Decimal("0.5"), user_id=None):

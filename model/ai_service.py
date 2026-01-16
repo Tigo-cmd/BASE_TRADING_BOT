@@ -1,5 +1,4 @@
 import warnings
-# Silence the deprecation warning for the old SDK - must be before import
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 import os
@@ -10,58 +9,27 @@ load_dotenv()
 
 class AIService:
     def __init__(self):
-        self.gemini_model = None
         self.groq_client = None
         self.active_provider = None
         
-        # Try Gemini first
-        gemini_key = os.getenv("GEMINI_API_KEY")
-        if gemini_key:
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=gemini_key)
-                self.gemini_model = genai.GenerativeModel('gemini-2.0-flash')
-                self.active_provider = "gemini"
-                print("✅ AIService: Using Google Gemini")
-            except Exception as e:
-                print(f"⚠️ Gemini init failed: {e}")
-        
-        # Try Groq as fallback
+        # Use Groq as primary AI provider
         groq_key = os.getenv("GROQ_API_KEY")
-        if groq_key and not self.active_provider:
+        if groq_key:
             try:
                 from groq import Groq
                 self.groq_client = Groq(api_key=groq_key)
                 self.active_provider = "groq"
-                print("✅ AIService: Using Groq (fallback)")
+                print("✅ AIService: Using Groq")
             except Exception as e:
                 print(f"⚠️ Groq init failed: {e}")
-        
-        # Also init Groq for fallback even if Gemini works
-        if groq_key and self.active_provider == "gemini":
-            try:
-                from groq import Groq
-                self.groq_client = Groq(api_key=groq_key)
-                print("✅ Groq ready as backup")
-            except:
-                pass
         
         self.is_active = self.active_provider is not None
         
         if not self.is_active:
-            print("⚠️ AIService: No AI provider configured (add GEMINI_API_KEY or GROQ_API_KEY)")
+            print("⚠️ AIService: No AI provider configured (add GROQ_API_KEY)")
 
     async def _call_ai(self, prompt: str) -> str:
-        """Call AI with automatic fallback from Gemini to Groq."""
-        # Try Gemini first
-        if self.gemini_model:
-            try:
-                response = self.gemini_model.generate_content(prompt)
-                return response.text
-            except Exception as e:
-                print(f"⚠️ Gemini error, trying Groq fallback: {e}")
-        
-        # Fallback to Groq
+        """Call Groq AI."""
         if self.groq_client:
             try:
                 completion = self.groq_client.chat.completions.create(
@@ -72,9 +40,9 @@ class AIService:
                 )
                 return completion.choices[0].message.content
             except Exception as e:
-                return f"AI error (both providers failed): {str(e)}"
+                return f"AI error: {str(e)}"
         
-        return "AI unavailable (no providers configured)"
+        return "AI unavailable (no provider configured)"
 
     async def analyze_token_security(self, token_data: dict) -> str:
         """AI-driven risk assessment of a token."""
