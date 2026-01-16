@@ -3,28 +3,81 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 import os
-import google.generativeai as genai
-from dotenv import load_dotenv
 import json
+from dotenv import load_dotenv
 
 load_dotenv()
 
 class AIService:
     def __init__(self):
-        api_key = os.getenv("GEMINI_API_KEY")
-        if api_key:
-            genai.configure(api_key=api_key)
-            # Use the newer model name (gemini-pro is deprecated)
-            self.model = genai.GenerativeModel('gemini-3-flash-preview')
-            self.is_active = True
-        else:
-            print("⚠️ AIService: GEMINI_API_KEY not found in .env")
-            self.is_active = False
+        self.gemini_model = None
+        self.groq_client = None
+        self.active_provider = None
+        
+        # Try Gemini first
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if gemini_key:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=gemini_key)
+                self.gemini_model = genai.GenerativeModel('gemini-2.0-flash')
+                self.active_provider = "gemini"
+                print("✅ AIService: Using Google Gemini")
+            except Exception as e:
+                print(f"⚠️ Gemini init failed: {e}")
+        
+        # Try Groq as fallback
+        groq_key = os.getenv("GROQ_API_KEY")
+        if groq_key and not self.active_provider:
+            try:
+                from groq import Groq
+                self.groq_client = Groq(api_key=groq_key)
+                self.active_provider = "groq"
+                print("✅ AIService: Using Groq (fallback)")
+            except Exception as e:
+                print(f"⚠️ Groq init failed: {e}")
+        
+        # Also init Groq for fallback even if Gemini works
+        if groq_key and self.active_provider == "gemini":
+            try:
+                from groq import Groq
+                self.groq_client = Groq(api_key=groq_key)
+                print("✅ Groq ready as backup")
+            except:
+                pass
+        
+        self.is_active = self.active_provider is not None
+        
+        if not self.is_active:
+            print("⚠️ AIService: No AI provider configured (add GEMINI_API_KEY or GROQ_API_KEY)")
+
+    async def _call_ai(self, prompt: str) -> str:
+        """Call AI with automatic fallback from Gemini to Groq."""
+        # Try Gemini first
+        if self.gemini_model:
+            try:
+                response = self.gemini_model.generate_content(prompt)
+                return response.text
+            except Exception as e:
+                print(f"⚠️ Gemini error, trying Groq fallback: {e}")
+        
+        # Fallback to Groq
+        if self.groq_client:
+            try:
+                completion = self.groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.7,
+                    max_tokens=1024,
+                )
+                return completion.choices[0].message.content
+            except Exception as e:
+                return f"AI error (both providers failed): {str(e)}"
+        
+        return "AI unavailable (no providers configured)"
 
     async def analyze_token_security(self, token_data: dict) -> str:
-        """
-        AI-driven risk assessment of a token.
-        """
+        """AI-driven risk assessment of a token."""
         if not self.is_active:
             return "AI Analysis unavailable (API Key missing)."
 
@@ -38,16 +91,10 @@ class AIService:
             f"\nProvide a concise 2-3 sentence summary of the risk level (Low, Medium, High) and why."
         )
 
-        try:
-            response = self.model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            return f"AI Analysis error: {str(e)}"
+        return await self._call_ai(prompt)
 
-    async def detect_market_trends(self, market_snapshot: list) -> str:
-        """
-        AI-driven trend detection across multiple tokens.
-        """
+    async def detect_market_trends(self, market_snapshot: dict) -> str:
+        """AI-driven trend detection across multiple tokens."""
         if not self.is_active:
             return "Market Trends unavailable (API Key missing)."
 
@@ -58,11 +105,21 @@ class AIService:
             f"Provide a short summary for a trader's dashboard."
         )
 
-        try:
-            response = self.model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            return f"Trend detection error: {str(e)}"
+        return await self._call_ai(prompt)
+
+    async def get_fun_fact(self) -> str:
+        """Generate a random fun fact about trading, crypto, or Base network."""
+        if not self.is_active:
+            return "Fun Facts unavailable (API Key missing)."
+
+        prompt = (
+            "Generate ONE random fun fact about any of these topics: "
+            "cryptocurrency trading, the Base network by Coinbase, DeFi, blockchain technology, "
+            "or trading psychology. Make it interesting, educational, and under 100 words. "
+            "Start directly with the fact, no intro needed."
+        )
+
+        return await self._call_ai(prompt)
 
 # Singleton instance
 _ai_service = None

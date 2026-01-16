@@ -35,6 +35,7 @@ from commands import (
     Copytrading_command,
     AI_intelligence_command,
     AI_security_analysis_command,
+    look_command,
     error,
     button_callback,
     message_handler
@@ -150,6 +151,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('leaderboard', Leaderboard_command))
     app.add_handler(CommandHandler('copytrade', Copytrading_command))
     app.add_handler(CommandHandler('ai', AI_intelligence_command))
+    app.add_handler(CommandHandler('look', look_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT, message_handler))
 

@@ -18,7 +18,8 @@ from store_to_db import (
     save_ai_signal,
     get_latest_ai_signals,
     create_alert,
-    get_user_alerts
+    get_user_alerts,
+    get_trade_count
 )
 from api import get_eth_price
 from telegram.helpers import escape_markdown
@@ -107,11 +108,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         ],
         [
             InlineKeyboardButton("💱 Buy/Sell", callback_data='buysell'),
-            InlineKeyboardButton("📈 Prices", callback_data='prices')
+            InlineKeyboardButton("🔎 Token Lookup", callback_data='look')
         ],
         [
             InlineKeyboardButton("👤 Profile", callback_data='profile'),
-            InlineKeyboardButton("💳 Wallets", callback_data='wallet')
+            InlineKeyboardButton("🎲 Fun Facts", callback_data='fun_facts')
         ],
         [
             InlineKeyboardButton("⚙️ Settings", callback_data='settings'),
@@ -216,6 +217,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             
         elif query.data == "ai_scan_trends":
             await AI_scan_trends_callback(update, context)
+            
+        elif query.data == "fun_facts":
+            await fun_facts_command(update, context)
+            
+        elif query.data == "look":
+            await look_command(update, context)
+            
+        elif query.data.startswith('look_'):
+            token_address = query.data.split('_')[1]
+            await look_token(update, context, token_address)
         
         # === WALLET ACTIONS ===
         elif query.data == "Generate_wallet":
@@ -833,6 +844,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text("❌ *Invalid input.* Please enter a numeric value.")
         return
 
+    # Handle /look token address input
+    if context.user_data.get('awaiting_look_address'):
+        from web3 import Web3
+        if Web3.is_address(user_message):
+            context.user_data['awaiting_look_address'] = False
+            await look_token(update, context, user_message)
+        else:
+            await update.message.reply_text("❌ *Invalid address.* Please enter a valid Base contract address.")
+        return
+
 async def token_swap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Placeholder for token swap selection
     text = "💱 *Select Token Flow*\n\nFeature arriving in next update!"
@@ -968,10 +989,13 @@ async def AI_scan_trends_callback(update: Update, context: ContextTypes.DEFAULT_
         
         trend_summary = await ai.detect_market_trends(context_data)
         
+        # Escape markdown special characters in AI response
+        safe_summary = trend_summary.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+        
         text = (
             "🤖 *AI Trend Analysis*\n"
             "━━━━━━━━━━━━━━━\n"
-            f"{trend_summary}\n"
+            f"{safe_summary}\n"
             "━━━━━━━━━━━━━━━\n"
             "Market scan complete. Recommendations updated."
         )
@@ -1003,11 +1027,14 @@ async def AI_security_analysis_command(update: Update, context: ContextTypes.DEF
         # Save insight to DB
         await save_ai_signal(token_address, "security", insight)
         
+        # Escape markdown special characters in AI response
+        safe_insight = insight.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+        
         text = (
             f"🤖 *AI Security Report*\n"
             f"🪙 `{info['symbol']}` | `{shorten_address(token_address)}`\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"{insight}\n"
+            f"{safe_insight}\n"
             f"━━━━━━━━━━━━━━━\n"
             f"🚨 *Warning:* AI analysis is probabilistic. Always DYOR."
         )
@@ -1018,3 +1045,107 @@ async def AI_security_analysis_command(update: Update, context: ContextTypes.DEF
     except Exception as e:
         print(f"ERROR: {e}")
         await loading_msg.edit_text("❌ *AI Scan Error:* AI scan failed. Check logs.")
+
+async def fun_facts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows a random AI-generated fun fact about trading or Base."""
+    query = update.callback_query
+    msg = query.message if query else update.message
+    loading_msg = await msg.edit_text("🎲 *Generating Fun Fact...*", parse_mode="Markdown") if query else await msg.reply_text("🎲 *Generating Fun Fact...*", parse_mode="Markdown")
+    
+    try:
+        ai = get_ai()
+        if not ai or not ai.is_active:
+            await loading_msg.edit_text("🎲 *Fun Fact*\n━━━━━━━━━━━━━━━\nAI services are offline. Here's a classic:\n\n_The first Bitcoin transaction was for two pizzas, costing 10,000 BTC!_")
+            return
+
+        fact = await ai.get_fun_fact()
+        
+        # Escape markdown special characters in AI response
+        safe_fact = fact.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+        
+        text = (
+            "🎲 *Fun Fact*\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"{safe_fact}\n"
+            "━━━━━━━━━━━━━━━"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Another Fact", callback_data="fun_facts")],
+            [InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]
+        ]
+        await loading_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
+    except Exception as e:
+        print(f"ERROR in fun_facts: {e}")
+        await loading_msg.edit_text("🎲 *Fun Fact*\n━━━━━━━━━━━━━━━\n_Base Network launched in August 2023 and quickly became one of the top L2s by TVL!_")
+
+async def look_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Prompts user to enter a token address for comprehensive read-only analysis."""
+    text = (
+        "🔎 *Token Lookup*\n"
+        "━━━━━━━━━━━━━━━\n"
+        "Paste any Base network token address below to get comprehensive information:\n\n"
+        "• Price & Market Cap\n"
+        "• Liquidity Depth\n"
+        "• Safety & Security Check\n"
+        "• AI Risk Assessment\n\n"
+        "_No wallet required. Read-only analysis._"
+    )
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+    
+    context.user_data['awaiting_look_address'] = True
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+async def look_token(update: Update, context: ContextTypes.DEFAULT_TYPE, token_address: str) -> None:
+    """Shows comprehensive read-only token info without buy/sell options."""
+    loading_msg = await update.message.reply_text("🔎 *Looking up token...*", parse_mode="Markdown")
+    
+    try:
+        trader = get_trader()
+        if trader is None:
+            await loading_msg.edit_text("❌ Trading engine offline.")
+            return
+
+        info = await trader.get_token_info(token_address)
+        
+        # Get AI insight if available
+        ai = get_ai()
+        ai_summary = ""
+        if ai and ai.is_active:
+            try:
+                insight = await ai.analyze_token_security(info)
+                safe_insight = insight.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+                ai_summary = f"\n🤖 *AI Assessment:*\n{safe_insight}\n"
+            except:
+                ai_summary = ""
+
+        text = (
+            f"🔎 *Token Lookup: {info['name']}*\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🪙 *Symbol:* `{info['symbol']}`\n"
+            f"📍 *Address:* `{shorten_address(token_address)}`\n\n"
+            f"💰 *Price:* `${info['price']:.8f}`\n"
+            f"📈 *Market Cap:* `${info['market_cap']:,.0f}`\n"
+            f"💧 *Liquidity:* `${info['liquidity']:,.0f}`\n\n"
+            f"🛡️ *Security:*\n"
+            f"• Renounced: {'✅ Yes' if info['renounced'] else '⚠️ No'}\n"
+            f"• Honeypot: {'✅ Clean' if not info.get('honeypot', False) else '🚨 Detected'}\n"
+            f"{ai_summary}"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🔗 [Basescan](https://basescan.org/token/{token_address}) | "
+            f"[DexScreener](https://dexscreener.com/base/{token_address}) | "
+            f"[GeckoTerminal](https://www.geckoterminal.com/base/pools/{token_address})"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data=f"look_{token_address}")],
+            [InlineKeyboardButton("💱 Trade This Token", callback_data=f"refresh_{token_address}")],
+            [InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]
+        ]
+        await loading_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown", disable_web_page_preview=True)
+        
+    except Exception as e:
+        print(f"ERROR in look_token: {e}")
+        await loading_msg.edit_text("❌ *Lookup Error*\n\nCouldn't find this token. Check the address and try again.")
