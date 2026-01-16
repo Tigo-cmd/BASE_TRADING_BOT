@@ -155,3 +155,19 @@ class BaseFlowTrader:
                 
             return {"success": r.status == 1, "tx_hash": h.hex()}
         except Exception as e: return {"success": False, "error": str(e)}
+
+    async def check_token_price(self, token_address: str) -> Decimal:
+        """Fetch current price of token in ETH."""
+        try:
+            return await self.get_swap_quote(token_address, self.WETH, Decimal("1.0"))
+        except:
+            return Decimal("0")
+
+    async def process_pending_orders(self):
+        """Skeleton for background order processing."""
+        # In a real implementation, this would:
+        # 1. Fetch all 'pending' orders from DB
+        # 2. For each order, check current token price
+        # 3. If trigger condition met (e.g. price < limit), execute swap
+        # 4. Update order status in DB
+        pass

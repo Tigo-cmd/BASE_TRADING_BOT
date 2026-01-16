@@ -10,9 +10,15 @@ from store_to_db import (
     balance_check, 
     delete_wallets_by_user,
     delete_specific_wallet,
-    get_user_trades,
-    get_trade_count,
-    save_trade
+    save_trade,
+    register_user,
+    get_referral_stats,
+    get_leaderboard,
+    update_user_settings,
+    save_ai_signal,
+    get_latest_ai_signals,
+    create_alert,
+    get_user_alerts
 )
 from api import get_eth_price
 from telegram.helpers import escape_markdown
@@ -34,6 +40,20 @@ def get_trader():
             return None
     return _trader
 
+_ai = None
+
+def get_ai():
+    """Get or create AIService instance (lazy loading)"""
+    global _ai
+    if _ai is None:
+        try:
+            from ai_service import get_ai_service
+            _ai = get_ai_service()
+        except Exception as e:
+            print(f"Warning: Could not initialize AI service: {e}")
+            return None
+    return _ai
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command - shows premium welcome message with ETH price."""
@@ -45,7 +65,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         eth_price = "N/A"
 
     username = update.effective_user.username
+    user_id = update.effective_user.id
     display_name = f"@{username}" if username else "Trader"
+    
+    # Handle Referral (Sprint 3)
+    referred_by = None
+    if context.args:
+        try:
+            referred_by = int(context.args[0])
+            if referred_by == user_id: referred_by = None # Can't refer self
+        except: pass
+    
+    await register_user(user_id, username, referred_by)
     
     welcome_text = (
         f"👋 *Welcome, {display_name}!*\n\n"
@@ -54,7 +85,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"🔥 *Features:*\n"
         f"• Instant Wallet Generation\n"
         f"• Lightning Fast Swaps\n"
-        f"• Real-time Price Tracking\n"
+        f"• Copy Trading & Referrals (NEW!)\n"
         f"• On-chain Attribution\n\n"
         f"🔗 [Website](https://base-trading-bot.vercel.app) | [Docs](https://docs.baseflow.xyz) | [Twitter](https://x.com/baseflow)\n\n"
         f"👇 *Select an option below to get started:*"
@@ -67,15 +98,24 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             InlineKeyboardButton("💳 Wallets", callback_data='wallet')
         ],
         [
-            InlineKeyboardButton("📈 Prices", callback_data='prices'),
-            InlineKeyboardButton("💱 Buy/Sell", callback_data='buysell')
+            InlineKeyboardButton("🤖 AI Intelligence", callback_data='ai_intelligence'),
+            InlineKeyboardButton("🏆 Leaderboard", callback_data='leaderboard')
+        ],
+        [
+            InlineKeyboardButton("🤝 Referrals", callback_data='referral'),
+            InlineKeyboardButton("👥 Copy Trading", callback_data='copytrade')
+        ],
+        [
+            InlineKeyboardButton("💱 Buy/Sell", callback_data='buysell'),
+            InlineKeyboardButton("📈 Prices", callback_data='prices')
         ],
         [
             InlineKeyboardButton("👤 Profile", callback_data='profile'),
-            InlineKeyboardButton("⚙️ Settings", callback_data='settings')
+            InlineKeyboardButton("💳 Wallets", callback_data='wallet')
         ],
         [
-            InlineKeyboardButton("📖 Help & Tutorial", callback_data='help')
+            InlineKeyboardButton("⚙️ Settings", callback_data='settings'),
+            InlineKeyboardButton("📖 Help", callback_data='help')
         ],
         [
             InlineKeyboardButton("❌ Close Menu", callback_data="close")
@@ -146,6 +186,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif query.data == "profile":
             await profile_command(update, context)
         
+        elif query.data == "referral":
+            await referral_command(update, context)
+            
+        elif query.data == "copytrade":
+            await Copytrading_command(update, context)
+            
+        elif query.data == "leaderboard":
+            await Leaderboard_command(update, context)
+        
         elif query.data == "settings":
             await Settings_command(update, context)
         
@@ -160,6 +209,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         elif query.data == "start":
             await start_command(update, context)
+            
+        elif query.data == "ai_intelligence":
+            await AI_intelligence_command(update, context)
+            
+        elif query.data == "ai_scan_trends":
+            await AI_scan_trends_callback(update, context)
         
         # === WALLET ACTIONS ===
         elif query.data == "Generate_wallet":
@@ -220,6 +275,42 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             wallet_buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=f'refresh_{token_address}')])
             
             await send_or_edit(update, "🎯 *Select Trading Wallet:*", InlineKeyboardMarkup(wallet_buttons))
+
+        # === SETTINGS ACTIONS (Sprint 4) ===
+        elif query.data.startswith("toggle_autobuy_"):
+            mode = query.data.split("_")[2]
+            enabled = True if mode == "on" else False
+            await update_user_settings(user_id, auto_buy_enabled=enabled)
+            await Settings_command(update, context)
+
+        elif query.data == "config_slippage":
+            text = "⚡ *Set Default Slippage*\n\nEnter the desired slippage percentage (e.g., 0.5, 1.0, 5.0):"
+            context.user_data["awaiting_config"] = "slippage"
+            await send_or_edit(update, text, InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="settings")]]))
+
+        elif query.data == "config_autobuy_amt":
+            text = "💰 *Set Auto-Buy Amount*\n\nEnter the default ETH amount for auto-buys (e.g., 0.1, 0.5):"
+            context.user_data["awaiting_config"] = "auto_buy_amount"
+            await send_or_edit(update, text, InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="settings")]]))
+
+        elif query.data == "config_gas":
+            text = "⛽ *Set Gas Priority*\n\nSelect your preferred gas mode:"
+            keyboard = [
+                [InlineKeyboardButton("Normal", callback_data="set_gas_normal"), InlineKeyboardButton("Fast", callback_data="set_gas_fast")],
+                [InlineKeyboardButton("Rapid", callback_data="set_gas_rapid")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="settings")]
+            ]
+            await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+        elif query.data.startswith("set_gas_"):
+            mode = query.data.split("_")[2]
+            await update_user_settings(user_id, gas_price_mode=mode)
+            await Settings_command(update, context)
+
+        elif query.data == "config_tpsl":
+            text = "🚀 *Set TP/SL Targets*\n\nEnter the Take Profit % (e.g., 100):"
+            context.user_data["awaiting_config"] = "auto_sell_tp"
+            await send_or_edit(update, text, InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="settings")]]))
 
         elif query.data.startswith('select_wallet_'):
             # Data format: select_wallet_{address}_{token_address}
@@ -310,6 +401,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif query.data.startswith('refresh_'):
             token_address = query.data.split('_')[1]
             await analyze_token(update, context, token_address)
+
+        elif query.data.startswith('ai_analyze_'):
+            token_address = query.data.split('_')[2]
+            await AI_security_analysis_command(update, context, token_address)
 
     except Exception as e:
         print(f"Callback Error: {e}")
@@ -513,16 +608,35 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
 
 async def Settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    settings = get_user_settings(user_id)
+    
     text = (
         "⚙️ *Settings*\n"
         "━━━━━━━━━━━━━━━\n"
-        "⚡ *Default Slippage:* `0.5%`\n"
-        "⛽ *Gas Priority:* `Normal`\n"
-        "🛡️ *Anti-Rug:* `Enabled`\n"
+        f"⚡ *Slippage:* `{settings['slippage']}%`\n"
+        f"🤖 *Auto-Buy:* `{'✅ ON' if settings['auto_buy_enabled'] else '❌ OFF'}`\n"
+        f"💰 *Auto-Buy Amount:* `{settings['auto_buy_amount']} ETH`\n"
+        f"🚀 *Auto-Sell (TP/SL):* `{settings['auto_sell_tp']}%` / `{settings['auto_sell_sl']}%` \n"
+        f"⛽ *Gas Priority:* `{settings['gas_price_mode'].capitalize()}`\n"
         "━━━━━━━━━━━━━━━\n"
-        "Full settings coming soon in v2.0!"
+        "Configure your high-speed trading parameters below:"
     )
-    keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+    
+    keyboard = [
+        [
+            InlineKeyboardButton(f"{'🔴 Disable' if settings['auto_buy_enabled'] else '🟢 Enable'} Auto-Buy", callback_data=f"toggle_autobuy_{'off' if settings['auto_buy_enabled'] else 'on'}"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Slippage", callback_data="config_slippage"),
+            InlineKeyboardButton("✏️ Auto-Buy Amt", callback_data="config_autobuy_amt")
+        ],
+        [
+            InlineKeyboardButton("⛽ Gas Price", callback_data="config_gas"),
+            InlineKeyboardButton("🚀 TP/SL", callback_data="config_tpsl")
+        ],
+        [InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]
+    ]
     await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
 
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -541,15 +655,44 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE, toke
     loading_msg = await (update.callback_query.message.edit_text("🔍 *Analyzing Token...*", parse_mode="Markdown") if update.callback_query else update.message.reply_text("🔍 *Analyzing Token...*", parse_mode="Markdown"))
     
     try:
+        user_id = update.effective_user.id
         trader = get_trader()
         if trader is None:
             await loading_msg.edit_text("❌ Trading engine offline.")
             return
 
+        # Sprint 4: Auto-Buy Logic
+        settings = get_user_settings(user_id)
+        if settings.get("auto_buy_enabled") and settings.get("auto_buy_amount", 0) > 0:
+            # Auto-execute buy!
+            auto_amt = settings["auto_buy_amount"]
+            # Find a wallet with balance
+            wallets_full = fetch_all_from_wallet(user_id)
+            exec_wallet = wallets_full[0]["address"] if wallets_full else None
+            
+            if exec_wallet:
+                await loading_msg.edit_text(f"🤖 *Auto-Buy Triggered!*\n\nExecuting buy for `{auto_amt} ETH` via `{shorten_address(exec_wallet)}`...", parse_mode="Markdown")
+                # We need the PK, which fetch_all_from_wallet now provides
+                pk = next((w["private_key"] for w in wallets_full if w["address"] == exec_wallet), None)
+                
+                result = await trader.swap_eth_for_tokens(
+                    token_out=token_address,
+                    wallet=exec_wallet,
+                    key=pk,
+                    amount_eth=Decimal(str(auto_amt)),
+                    user_id=user_id
+                )
+                
+                info = await trader.get_token_info(token_address)
+                if result["success"]:
+                    await loading_msg.edit_text(f"✅ *Auto-Buy Successful!*\n\nBought `{info['symbol']}`\n🔗 [Basescan](https://basescan.org/tx/{result['tx_hash']})", parse_mode="Markdown")
+                    return
+                else:
+                    await loading_msg.edit_text(f"❌ *Auto-Buy Failed:* {result.get('error')}\n\nFalling back to manual analysis...", parse_mode="Markdown")
+                    await asyncio.sleep(2)
+                
+        # (Continue with normal analysis if auto-buy failed or was off)
         info = await trader.get_token_info(token_address)
-        user_id = update.effective_user.id
-        
-        # Check if user has this token in any wallet
         wallets = fetch_all_from_wallet(user_id)
         total_token_balance = Decimal("0")
         held_wallets = []
@@ -580,7 +723,8 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE, toke
         
         if total_token_balance > 0:
             keyboard.append([InlineKeyboardButton("🚀 Sell Token", callback_data=f"sell_init_{token_address}")])
-            
+        
+        keyboard.append([InlineKeyboardButton("🤖 AI Security Analysis", callback_data=f"ai_analyze_{token_address}")])
         keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_{token_address}")])
         keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="buysell"), InlineKeyboardButton("❌ Close", callback_data="close")])
         
@@ -588,6 +732,7 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE, toke
         
     except Exception as e:
         await loading_msg.edit_text(f"❌ *Analysis Error*\n\n{str(e)[:100]}")
+
 
 async def wallet_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, num: int) -> None:
     user_id = update.effective_user.id
@@ -666,9 +811,201 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await analyze_token(update, context, user_message)
         else:
             await update.message.reply_text("❌ *Invalid address.* Please enter a valid Base contract address.")
+        return
+
+    # === CONFIG UPDATES (Sprint 4) ===
+    config_field = context.user_data.get("awaiting_config")
+    if config_field:
+        try:
+            val = float(user_message)
+            await update_user_settings(user_id, **{config_field: val})
+            context.user_data["awaiting_config"] = None
+            await update.message.reply_text(f"✅ *Updated:* `{config_field.replace('_', ' ').capitalize()}` set to `{val}`", parse_mode="Markdown")
+            await Settings_command(update, context)
+        except ValueError:
+            await update.message.reply_text("❌ *Invalid input.* Please enter a numeric value.")
+        return
 
 async def token_swap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Placeholder for token swap selection
     text = "💱 *Select Token Flow*\n\nFeature arriving in next update!"
     keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="buysell")]]
     await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+# ============ Referral & Engagement (Sprint 3) ============
+
+async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows the user's referral dashboard."""
+    user_id = update.effective_user.id
+    stats = get_referral_stats(user_id)
+    bot_username = context.bot.username
+    
+    # Generate referral link
+    ref_link = f"https://t.me/{bot_username}?start={user_id}"
+    
+    text = (
+        f"🤝 *Referral Program*\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"Share your link and earn *20%* of all trading fees generated by your referrals! 💸\n\n"
+        f"👥 *Total Referred:* `{stats['referral_count']}`\n"
+        f"💰 *Total Earned:* `{stats['total_earned_eth']:.4f} ETH`\n\n"
+        f"🔗 *Your Referral Link:*\n`{ref_link}`\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"Rewards are credited instantly to your primary wallet upon trade execution."
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("📤 Share Link", url=f"https://t.me/share/url?url={ref_link}&text=Trade%20on%20Base%20lightning%20fast%20with%20BaseFlow!")],
+        [InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]
+    ]
+    
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+async def Copytrading_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Dashboard for copy trading settings."""
+    text = (
+        f"👥 *Copy Trading (Beta)*\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"Automatically follow and copy the trades of top-performing wallets on Base.\n\n"
+        f"⚠️ *Status:* This feature is currently in internal testing. Stay tuned for the public release!\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"Features coming soon:\n"
+        f"• Master Leaderboard\n"
+        f"• Custom Slippage per Master\n"
+        f"• Risk Management (Stop Loss)"
+    )
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+async def Leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows global top traders."""
+    top_traders = get_leaderboard(10)
+    
+    text = "🏆 *Global Leaderboard*\n━━━━━━━━━━━━━━━\n"
+    if not top_traders:
+        text += "No trades recorded yet. Be the first to top the chart!"
+    else:
+        for i, t in enumerate(top_traders, 1):
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "👤"
+            text += f"{medal} *{t['username']}*\n   Vol: `{t['volume']:.2f} ETH` | `{t['trades']}` trades\n"
+    
+    text += "━━━━━━━━━━━━━━━\nGlobal ranking updates every 5 minutes."
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+# ============ AI & Intelligence (Sprint 5) ============
+
+async def AI_intelligence_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Dashboard for AI-driven market insights."""
+    ai = get_ai()
+    if not ai or not ai.is_active:
+        text = "🤖 *AI Intelligence*\n\nAI services are currently offline. Please configure `GEMINI_API_KEY` to unlock real-time trends."
+        keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start")]]
+        await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+        return
+
+    # Fetch latest signals from DB
+    signals = get_latest_ai_signals(3)
+    
+    text = (
+        "🤖 *BaseFlow AI Intelligence*\n"
+        "━━━━━━━━━━━━━━━\n"
+        "*Recent AI Signals:*\n"
+    )
+    
+    if not signals:
+        text += "_Scanning Base for emerging opportunities..._\n"
+    else:
+        for s in signals:
+            text += f"• `{s['token'][:8]}...`: {s['insight'][:60]}...\n"
+            
+    text += (
+        "\n━━━━━━━━━━━━━━━\n"
+        "🔥 *AI-Powered Features:*\n"
+        "• Security Deep-Scan\n"
+        "• Narrative Detection\n"
+        "• Dynamic Risk Scoring"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 Scan Trends", callback_data="ai_scan_trends")],
+        [InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]
+    ]
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+async def AI_scan_trends_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Triggers a real-time AI scan of the Base network market."""
+    query = update.callback_query
+    await query.message.edit_text("🤖 *AI Scanning Base DeFi Market...*", parse_mode="Markdown")
+    
+    try:
+        trader = get_trader()
+        ai = get_ai()
+        if not ai or not ai.is_active:
+            await query.message.edit_text("❌ AI Service offline.")
+            return
+
+        # Fetch volume data as a proxy for market activity
+        from store_to_db import get_total_volume
+        market_stats = get_total_volume()
+        
+        # Get latest signals
+        signals = get_latest_ai_signals(5)
+        
+        context_data = {
+            "market_stats": market_stats,
+            "recent_signals": signals
+        }
+        
+        trend_summary = await ai.detect_market_trends(context_data)
+        
+        text = (
+            "🤖 *AI Trend Analysis*\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"{trend_summary}\n"
+            "━━━━━━━━━━━━━━━\n"
+            "Market scan complete. Recommendations updated."
+        )
+        
+        keyboard = [[InlineKeyboardButton("⬅️ AI Dashboard", callback_data="ai_intelligence"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
+    except Exception as e:
+        await query.message.edit_text(f"❌ Trend Scan Error: {str(e)}")
+
+async def AI_security_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE, token_address: str) -> None:
+    """Runs a dedicated AI security scan for a token."""
+    query = update.callback_query
+    # Handle both direct message and callback
+    msg = query.message if query else update.message
+    loading_msg = await msg.edit_text("🤖 *AI Deep-Scan in progress...*", parse_mode="Markdown") if query else await msg.reply_text("🤖 *AI Deep-Scan in progress...*", parse_mode="Markdown")
+    
+    try:
+        trader = get_trader()
+        ai = get_ai()
+        if not ai or not ai.is_active:
+            await loading_msg.edit_text("❌ AI Service offline.")
+            return
+
+        info = await trader.get_token_info(token_address)
+        insight = await ai.analyze_token_security(info)
+        
+        # Save insight to DB
+        await save_ai_signal(token_address, "security", insight)
+        
+        text = (
+            f"🤖 *AI Security Report*\n"
+            f"🪙 `{info['symbol']}` | `{shorten_address(token_address)}`\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"{insight}\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🚨 *Warning:* AI analysis is probabilistic. Always DYOR."
+        )
+        
+        keyboard = [[InlineKeyboardButton("⬅️ Analysis", callback_data=f"refresh_{token_address}"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+        await loading_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
+    except Exception as e:
+        await loading_msg.edit_text(f"❌ AI Scan Error: {str(e)}")

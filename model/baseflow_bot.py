@@ -30,6 +30,11 @@ from commands import (
     CreateWallet_command,
     tip_command,
     profile_command,
+    referral_command,
+    Leaderboard_command,
+    Copytrading_command,
+    AI_intelligence_command,
+    AI_security_analysis_command,
     error,
     button_callback,
     message_handler
@@ -45,14 +50,34 @@ init_db()  # Initialize the database when the script runs
 TELEGRAM_TOKEN = os.getenv('BASEFLOW_BOT_API')
 TOKEN: Final = TELEGRAM_TOKEN
 
-if not TOKEN:
-    print("❌ Error: BASEFLOW_BOT_API not found in .env file!")
-    print("Please make sure your .env file contains: BASEFLOW_BOT_API=your_bot_token")
     exit(1)
+
+async def monitor_callback(token_address, pool_address):
+    """
+    Called by the monitor when a new pool is detected.
+    """
+    from store_to_db import save_ai_signal, get_ai_service
+    # Broadcast to registered users (simplified for beta)
+    # In a real app, we would query users who enabled 'listing_alerts'
+    print(f"🚀 New Pool Detected: {token_address} at {pool_address}")
+    
+    # We could also trigger an automatic AI analysis here
+    # and save it to the DB so users can see it in their dashboard.
+    await save_ai_signal(token_address, "listing", f"New pool detected at {pool_address}")
+
+async def post_init(application: Application):
+    """
+    Setup background tasks after bot initialization.
+    """
+    from monitor import get_monitor
+    monitor = get_monitor()
+    asyncio.create_task(monitor.watch_new_pools(monitor_callback))
+    print("✅ Background monitor started.")
 
 
 if __name__ == '__main__':
     print('Starting BaseFlow Bot......')
+    import asyncio
     
     # Configure request with longer timeouts for slower connections
     request = HTTPXRequest(
@@ -69,6 +94,7 @@ if __name__ == '__main__':
         .token(TOKEN)
         .request(request)
         .get_updates_request(request)
+        .post_init(post_init)
         .build()
     )
 
@@ -82,6 +108,10 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('Trades', Trades_command))
     app.add_handler(CommandHandler('settings', Settings_command))
     app.add_handler(CommandHandler('help', help_command))
+    app.add_handler(CommandHandler('referral', referral_command))
+    app.add_handler(CommandHandler('leaderboard', Leaderboard_command))
+    app.add_handler(CommandHandler('copytrade', Copytrading_command))
+    app.add_handler(CommandHandler('ai', AI_intelligence_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT, message_handler))
 
