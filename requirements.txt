@@ -1,2 +1,27 @@
-dotenv
-requests
+# BaseFlow Dependencies
+
+# Web3 and Blockchain
+web3>=6.0.0
+eth-account>=0.8.0
+
+# Telegram Bot
+python-telegram-bot>=20.0
+
+# Environment and Config
+python-dotenv>=1.0.0
+
+# API Requests
+requests>=2.28.0
+
+# Database (current - SQLite is built-in)
+# For future PostgreSQL migration:
+# asyncpg>=0.27.0
+# sqlalchemy>=2.0.0
+
+# Encryption (for Sprint 2 - private key encryption)
+# cryptography>=40.0.0
+
+# Server (for Sprint 2 - FastAPI backend)
+# fastapi>=0.100.0
+# uvicorn>=0.22.0
+# redis>=4.5.0

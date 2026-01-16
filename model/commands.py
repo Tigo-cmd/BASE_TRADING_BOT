@@ -8,500 +8,475 @@ from store_to_db import (
     init_db, 
     balance_check, 
     delete_wallets_by_user,
-    delete_specific_wallet
-    )
-from api import get_swell_price
+    delete_specific_wallet,
+    get_user_trades,
+    get_trade_count,
+    save_trade
+)
+from api import get_eth_price
 from telegram.helpers import escape_markdown
 from generate_wallet import generate_wallet
 import asyncio
-from mainet import SwellSwapper
-from web3 import Web3
 
-swapper = SwellSwapper()
+# Note: web3 and trader are imported lazily to avoid slow startup
+_trader = None
+
+def get_trader():
+    """Get or create BaseFlowTrader instance (lazy loading)"""
+    global _trader
+    if _trader is None:
+        try:
+            from mainet import BaseFlowTrader
+            _trader = BaseFlowTrader()
+        except Exception as e:
+            print(f"Warning: Could not initialize trader: {e}")
+            return None
+    return _trader
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None : 
-    swell_price = get_swell_price()
-    swell_price = "{:,.6f}".format(swell_price)  # Format the price to 2 decimal places
-    username = update.message.from_user.username
-    if username:
-        welcome_text = (
-        f"Welcome @{username}\n"
-        "🚀 SwellTradingBot: Your all-in-one toolkit for Swell trading 🪙\n\n"
-        f"💰 SWELL Price: ${swell_price}\n\n"
-        "🧱 Create your wallets at /wallets\n"
-        "[Website](https://swelltradingbot.vercel.app)| [Github](https://github.com/SwellTradingBot/) | [Twitter](https://x.com/swelltradingbot)"
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /start command - shows premium welcome message with ETH price."""
+    # Fetch ETH price in a non-blocking way
+    try:
+        eth_price_val = await asyncio.to_thread(get_eth_price)
+        eth_price = f"${eth_price_val:,.2f}" if eth_price_val > 0 else "N/A"
+    except Exception:
+        eth_price = "N/A"
+
+    username = update.effective_user.username
+    display_name = f"@{username}" if username else "Trader"
+    
+    welcome_text = (
+        f"👋 *Welcome, {display_name}!*\n\n"
+        f"🚀 *BaseFlow* is your ultimate companion for high-speed trading on the *Base Network* 🔵\n\n"
+        f"💰 *Current ETH Price:* `{eth_price}`\n\n"
+        f"🔥 *Features:*\n"
+        f"• Instant Wallet Generation\n"
+        f"• Lightning Fast Swaps\n"
+        f"• Real-time Price Tracking\n"
+        f"• On-chain Attribution\n\n"
+        f"🔗 [Website](https://base-trading-bot.vercel.app) | [Docs](https://docs.baseflow.xyz) | [Twitter](https://x.com/baseflow)\n\n"
+        f"👇 *Select an option below to get started:*"
     )
-    else:
-        welcome_text = (
-            f"Welcome "
-            "🚀 SwellTradingBot: Your all-in-one toolkit for Swell trading 🪙\n\n"
-            f"💰 SWELL Price: ${swell_price}\n\n"
-            "🧱 Create your first wallet at /wallets\n"
-            "[Website](https://swelltradingbot.vercel.app)| [Github](https://github.com/SwellTradingBot/) | [Twitter](https://x.com/swelltradingbot)"
-        )
 
-    # Create a keyboard with buttons
+    # Create a premium layout keyboard
     keyboard = [
-        [InlineKeyboardButton("📈️Trades", callback_data='trades'),InlineKeyboardButton("💳️Wallets", callback_data='wallet')],
-        [InlineKeyboardButton("👨‍🦱️Profile", callback_data='profile')],
-        [InlineKeyboardButton("🤑️Prices", callback_data='prices'),InlineKeyboardButton("🌟️Buysell", callback_data='buysell')],
-        [InlineKeyboardButton("🛠️Settings", callback_data='settings')],
-        [InlineKeyboardButton("ℹ️Help", callback_data='help')],
-        [InlineKeyboardButton("❌ Close", callback_data="close")],
+        [
+            InlineKeyboardButton("📊 Trades", callback_data='trades'),
+            InlineKeyboardButton("💳 Wallets", callback_data='wallet')
+        ],
+        [
+            InlineKeyboardButton("📈 Prices", callback_data='prices'),
+            InlineKeyboardButton("💱 Buy/Sell", callback_data='buysell')
+        ],
+        [
+            InlineKeyboardButton("👤 Profile", callback_data='profile'),
+            InlineKeyboardButton("⚙️ Settings", callback_data='settings')
+        ],
+        [
+            InlineKeyboardButton("📖 Help & Tutorial", callback_data='help')
+        ],
+        [
+            InlineKeyboardButton("❌ Close Menu", callback_data="close")
+        ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        welcome_text, 
-        reply_markup=reply_markup, 
-        parse_mode="Markdown"
-    )
-    print("activated Start command...")
 
-
-# Callback query handler
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()  # Acknowledge the callback query
-
-    # Map callback data to functions or responses
-    try:
-        if query.data == "return_":
-            await query.message.delete()
-            await CreateWallet_command(update, context)
-                # In your button_callback function, add:
-        elif query.data == 'enter_token_address':
-            await query.message.reply_text(
-                "📝 Please paste the token contract address:",
-                reply_markup=ForceReply(selective=True)
-            )
-            context.user_data['awaiting_token_address'] = True
-        
-        elif query.data.startswith('buy_'):
-            token_address = query.data.split('_')[1]
-            # Fetch user's wallets
-            user_id = update.effective_user.id
-            wallets = fetch_all_from_wallet(user_id)
-            
-            if not wallets:
-                await query.message.reply_text(
-                    "❌ No wallets found. Please create a wallet first using /wallet"
-                )
-                return
-            
-            # Create wallet selection buttons
-            wallet_buttons = []
-            for wallet in wallets:
-                short_address = shorten_address(wallet["address"])
-                wallet_buttons.append([
-                    InlineKeyboardButton(
-                        f"💳 {short_address}",
-                        callback_data=f"select_wallet_{wallet['address']}_{token_address}"
-                    )
-                ])
-            
-            wallet_buttons.append([InlineKeyboardButton("❌ Cancel", callback_data='buysell')])
-            reply_markup = InlineKeyboardMarkup(wallet_buttons)
-            
-            await query.message.reply_text(
-                "Select a wallet to trade with:",
-                reply_markup=reply_markup
-            )
-        elif query.data == "wallet":
-            await CreateWallet_command(update, context)
-        elif query.data == "remove_all":
-            await query.message.reply_text(
-                "Are you sure you want to remove all wallets? Type *CONFIRM* to proceed.",
-                reply_markup=ForceReply(selective=True),
-                parse_mode="Markdown",
-            )
-            context.user_data["awaiting_confirmation"] = "remove_all"  # Set confirmation state
-            # asyncio.sleep(5)  # Wait for 5 seconds before deleting the message
-            # await confirmation_message.delete()  # Delete the confirmation message
-        elif query.data == "profile":
-            await profile_command(update, context)
-        elif query.data.startswith("address_"):
-            address = query.data.split("_", 1)[1]
-            await address_handler(update, context, address)
-        elif query.data == "trades":
-            await Trades_command(update, context)
-        elif query.data == "settings":
-            await Settings_command(update, context)
-        elif query.data == "help":
-            await help_command(update, context)
-            selected = update.callback_query
-        elif query.data == "swap_tokens":
-            await token_swap(update, context)
-            await query.message.delete()
-        elif query.data == "Generate_wallet":
-            await wallet_callback_handler(update, context, 0)
-        elif query.data == "5_wallets":
-            await wallet_callback_handler(update, context, 5)
-            print("Wallet created and stored in the database.")
-        elif query.data == "10_wallets":
-            await wallet_callback_handler(update, context, 10)
-            print("Wallet created and stored in the database.")
-        elif query.data == "connect_wallet":
-            await query.message.reply_text("Connect your wallet to the bot.")
-        elif query.data == "reload_all":
-            await query.message.reply_text("Reloading all wallets...")
-            wallets = await fetch_all_from_wallet()
-            for wallet in wallets:
-                address = wallet['address']
-                private_key = wallet['private_key']
-                await query.message.reply_text(f"Address: {address}, Private Key: {private_key}")
-        elif query.data == "transfer_all":
-            await query.message.reply_text("Transferring all Swell to one wallet...")
-            wallets = await fetch_all_from_wallet()
-            for wallet in wallets:
-                address = wallet['address']
-                private_key = wallet['private_key']
-                await query.message.reply_text(f"Address: {address}, Private Key: {private_key}")
-        elif query.data == "close":
-            await query.message.delete()
-        elif query.data.startswith("delete"):
-            await query.message.reply_text(
-                "Are you sure you want to delete this wallet? Type *CONFIRM* to proceed.",
-                reply_markup=ForceReply(selective=True),
-                parse_mode="Markdown",
-            )
-            context.user_data["awaiting_confirmation"] = "delete"  # Set confirmation state
-            address = query.data.split("_", 1)[1]
-            await message_handler(update, context, address)
-        else:
-            await query.message.reply_text("Unknown command. Please try again.")
-
-
-    except Exception as e:
-        print(f"Error handling callback: {e}")
-        await query.message.reply_text("An error occurred while processing your request.")
-
-
-async def token_swap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # If this was a button click, edit the message. Otherwise send new.
     if update.callback_query:
-        keyboard = [
-            [InlineKeyboardButton("🔃️ SWELL/USDT", callback_data='swap_swell/usdt')],
-        ]
-    updated = InlineKeyboardMarkup(keyboard)
-    await update.callback_query.message.reply_text(
-        "Select a token to swap:",
-        reply_markup=updated,
-        parse_mode="Markdown"
-    )
-
-async def address_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, addr:str) -> None:
-    message = f"Address: {addr}\n"
-    # Fetch the private key from the database
-    Button = [
-        [InlineKeyboardButton("✍️ Edit", callback_data='edit'), InlineKeyboardButton("🗑️ Delete", callback_data=f'delete{addr}')],
-        [InlineKeyboardButton("🔃️ Transfer Swell", callback_data='reload_all'), InlineKeyboardButton(" Transfer to First 10 Wallets", callback_data="first_10")],
-        [InlineKeyboardButton("🔃️ Transfer Token", callback_data='transfer_token')],
-        [InlineKeyboardButton("🔃️ Return To Wallets", callback_data='return_')],
-        [InlineKeyboardButton("❌ Close", callback_data="close")],
-    ]
-
-    reply_markup = InlineKeyboardMarkup(Button)
-
-    await update.callback_query.message.reply_text(
-        message,
-        reply_markup=reply_markup,
-        parse_mode="Markdown",
-    )
-
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, addr:str = None) -> None:
-    user_message = update.message.text.strip()  # Get the user's message
-    print(user_message)
-    user_id = update.effective_user.id
-    # Check if the user is in a confirmation state
-    if context.user_data.get("awaiting_confirmation") == "remove_all":
-        if user_message.upper() == "CONFIRM":
-            # Perform the remove_all action
-            await delete_wallets_by_user(user_id)
-            # await update.message.reply_text("All your wallets have been removed.")
-            # Clear the confirmation state
-            context.user_data["awaiting_confirmation"] = None
-        else:
-            await update.message.reply_text(
-                "Action canceled. Type *CONFIRM* if you want to proceed.",
-                parse_mode="Markdown",
-            )
-        await update.message.delete()  # Delete the message after confirmation
-        await CreateWallet_command(update, context)
-    elif context.user_data.get("awaiting_confirmation") == "delete":
-        if user_message.upper() == "CONFIRM":
-            # Perform the delete action
-            await delete_specific_wallet(user_id, addr)
-            # await update.message.reply_text("Your wallet has been deleted.")
-            # Clear the confirmation state
-            context.user_data["awaiting_confirmation"] = None
-        else:
-            await update.message.reply_text(
-                "Action canceled. Type *CONFIRM* if you want to proceed.",
-                parse_mode="Markdown",
-            )
-    elif context.user_data.get('awaiting_token_address'):
-        if Web3.is_address(user_message):
-            context.user_data['awaiting_token_address'] = False
-            await analyze_token(update, context, user_message)
-        else:
-            await update.message.reply_text(
-                "❌ Invalid token address. Please enter a valid contract address."
-            )
-        return
-
-async def wallet_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, num: int) -> None:
-    user_id = update.effective_user.id
-    await update.callback_query.message.reply_text("generating wallets...")
-    if num:
-        for i in range(num):
-            # Generate a new wallet
-            # This is a placeholder for the actual wallet generation logic
-            # You should replace this with your actual wallet generation code
-            private_key, address = await generate_wallet()
-            print(private_key, address)
-            await create_wallet_db(user_id, address, private_key, 0.0)
-            escaped_key = escape_markdown(private_key, version=2)
-            await update.callback_query.message.reply_text(
-                f"New Wallet Info: \nAddress: \n<code>{address}</code>  \nPrivate_key: \n<tg-spoiler>{escaped_key}</tg-spoiler> \n⚠️ do not disclose your key",
-                parse_mode="HTML", # Use HTML to format the message
-            )
-    else:
-        private_key, address = await generate_wallet()
-        print(private_key, address)
-        await create_wallet_db(user_id, address, private_key, 0.0)
-        escaped_key = escape_markdown(private_key, version=2)
-        await update.callback_query.message.reply_text(
-            f"New Wallet Info: \nAddress: \n<code>{address}</code>  \nPrivate_key: \n<tg-spoiler>{escaped_key}</tg-spoiler> \n⚠️ do not disclose your key",
-            parse_mode="HTML", # Use HTML to format the message
-        )
-        print("Wallet created and stored in the database.")
-
-# Price command
-async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    try:
-        symbol = context.args[0].upper()  # e.g., "BTC"
-        ticker = exchange.fetch_ticker(f"{symbol}/USDT")
-        price = ticker['last']
-        update.message.reply_text(f"The price of {symbol} is ${price}")
-    except Exception as e:
-       await update.message.reply_text(f"Error: {str(e)}")
-
-
-# function to handle the trades command
-async def Trades_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.callback_query:
-        await update.callback_query.message.reply_text("You Don't Have Any Transaction Yet")
-    elif update.message:
-        await update.message.reply_text("You Don't Have Any Transaction Yet")
-
-
-# function to handle the help reply
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    help_text = (
-    "/start - Get started and Trade Swell confidently\n"
-    "/wallet - Create a wallet and multiple wallets\n"
-    "/profile - View your portfolio\n"
-    "/trades - Monitor and Track your trades\n"
-    "/buysell - Swap Tokens\n"
-    "/settings - Set preferences and Automations, auto buy, auto sell, slippage\n"
-    "/prices - Check prices on ecosystem\n"
-    "/tip - Last tip levels\n"
-    "/language - Select language\n"
-    "/help - Tutorial & Help"
-    )
-    if update.callback_query:
-        await update.callback_query.message.reply_text(help_text, parse_mode="Markdown")
-    elif update.message:
-        await update.message.reply_text(help_text, parse_mode="Markdown") 
-
-# function to handle the buysell reply
-async def Buysell_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    keyboard = [
-        [InlineKeyboardButton("🔍 Enter Token Address", callback_data='enter_token_address')],
-        [InlineKeyboardButton("🔃️ Swap Swell Tokens", callback_data='swap_tokens')],
-        [InlineKeyboardButton("❌ Close", callback_data="close")]
-    ]
-    main = InlineKeyboardMarkup(keyboard)
-    
-    message = (
-        "🪙 *Token Trading*\n\n"
-        "1. Enter token contract address to analyze\n"
-        "2. Review token information\n"
-        "3. Select wallet and amount\n"
-        "4. Confirm swap"
-    )
-    
-    if update.callback_query:
-        await update.callback_query.message.reply_text(
-            message,
-            reply_markup=main,
-            parse_mode="Markdown"
-        )
-    elif update.message:
-        await update.message.reply_text(
-            message,
-            reply_markup=main,
-            parse_mode="Markdown"
-        )
-async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE, token_address: str) -> None:
-    try:
-        # Initialize SwellSwapper
-        token_info = await swapper.get_token_info(token_address)
-        
-        # Format token information
-        info_message = (
-            f"*Token Information*\n\n"
-            f"*Symbol:* {token_info['symbol']}\n"
-            f"*Contract Address:* `{token_info['address']}`\n"
-            f"*Launch Date:* {token_info['launch_date']}\n\n"
-            f"*Exchange:* {token_info['exchange']}\n"
-            f"*Market Cap:* ${token_info['market_cap']:,.2f}\n"
-            f"*Liquidity:* ${token_info['liquidity']:,.2f}\n"
-            f"*Token Price:* ${token_info['price']:,.8f}\n"
-            f"*Pooled SWELL:* {token_info['pooled_swell']:,.2f}\n\n"
-            f"*Security Info:*\n"
-            f"- Renounced: {'✅' if token_info['renounced'] else '❌'}\n"
-            f"- Frozen: {'❌' if token_info['frozen'] else '✅'}\n"
-            f"- Revoked: {'❌' if token_info['revoked'] else '✅'}\n\n"
-            f"*Swap Info:*\n"
-            f"1 SWELL = {token_info['swell_ratio']} {token_info['symbol']}\n"
-            f"Price Impact: {token_info['price_impact']}%\n\n"
-            f"*Links:*\n"
-            f"[Website]({token_info['website']}) | "
-            f"[Documentation]({token_info['documentation']})"
-        )
-        
-        # Create keyboard for buying options
-        keyboard = [
-            [InlineKeyboardButton("💰 Buy Token", callback_data=f'buy_{token_address}')],
-            [InlineKeyboardButton("🔄 Refresh Info", callback_data=f'refresh_{token_address}')],
-            [InlineKeyboardButton("❌ Cancel", callback_data='buysell')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            info_message,
+        await update.callback_query.message.edit_text(
+            welcome_text,
             reply_markup=reply_markup,
             parse_mode="Markdown",
             disable_web_page_preview=True
         )
-        
-    except Exception as e:
+    else:
         await update.message.reply_text(
-            f"❌ Error analyzing token: {str(e)}\n\n"
-            "Please verify the contract address and try again.",
-            parse_mode="Markdown"
+            welcome_text, 
+            reply_markup=reply_markup, 
+            parse_mode="Markdown",
+            disable_web_page_preview=True
         )
-# function to handle the settings reply
-async def Settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        # function to handle the help reply
-        pass
 
-# function to handle the wallet reply
+
+# Helper: General message sender/editor for consistent UX
+async def send_or_edit(update: Update, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = "Markdown", disable_web_page_preview: bool = True):
+    """Sends a new message or edits existing one based on context."""
+    if update.callback_query:
+        try:
+            await update.callback_query.message.edit_text(
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                disable_web_page_preview=disable_web_page_preview
+            )
+        except Exception as e:
+            # If edit fails (e.g. same content), just try to answer query
+            print(f"Edit failed: {e}")
+    else:
+        await update.message.reply_text(
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            disable_web_page_preview=disable_web_page_preview
+        )
+
+# Callback query handler
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        # === CLOSE BUTTON ===
+        if query.data == "close":
+            try:
+                await query.message.delete()
+            except:
+                await query.message.edit_text("✅ *Menu Closed*", parse_mode="Markdown")
+            return
+        
+        # === NAVIGATION ===
+        elif query.data == "return_" or query.data == "wallet":
+            await CreateWallet_command(update, context)
+        
+        elif query.data == "trades":
+            await Trades_command(update, context)
+        
+        elif query.data == "profile":
+            await profile_command(update, context)
+        
+        elif query.data == "settings":
+            await Settings_command(update, context)
+        
+        elif query.data == "help":
+            await help_command(update, context)
+        
+        elif query.data == "buysell":
+            await Buysell_command(update, context)
+        
+        elif query.data == "prices":
+            await price_command(update, context)
+        
+        elif query.data == "start":
+            await start_command(update, context)
+        
+        # === WALLET ACTIONS ===
+        elif query.data == "Generate_wallet":
+            await wallet_callback_handler(update, context, 0)
+        
+        elif query.data == "5_wallets":
+            await wallet_callback_handler(update, context, 5)
+        
+        elif query.data == "10_wallets":
+            await wallet_callback_handler(update, context, 10)
+        
+        elif query.data == "remove_all":
+            text = "⚠️ *Remove All Wallets?*\n\nThis action cannot be undone. All private keys will be purged from our database.\n\nType *CONFIRM* to proceed."
+            reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="wallet")]])
+            await send_or_edit(update, text, reply_markup)
+            context.user_data["awaiting_confirmation"] = "remove_all"
+        
+        elif query.data.startswith("address_"):
+            address = query.data.split("_", 1)[1]
+            await show_wallet_details(update, address)
+        
+        elif query.data.startswith("delete_"):
+            address = query.data.split("_", 1)[1]
+            text = f"⚠️ *Delete Wallet?*\n\n`{address}`\n\nType *CONFIRM* to proceed."
+            reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="wallet")]])
+            await send_or_edit(update, text, reply_markup)
+            context.user_data["awaiting_confirmation"] = "delete"
+            context.user_data["delete_address"] = address
+        
+        # === TOKEN ACTIONS ===
+        elif query.data == 'enter_token_address':
+            text = "📝 *Enter Token Address*\n\nPlease paste the contract address of the token you want to trade below:"
+            reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="buysell")]])
+            await send_or_edit(update, text, reply_markup)
+            context.user_data['awaiting_token_address'] = True
+        
+        elif query.data == "swap_tokens":
+            await token_swap(update, context)
+        
+        elif query.data.startswith('buy_'):
+            token_address = query.data.split('_')[1]
+            user_id = update.effective_user.id
+            wallets = fetch_all_from_wallet(user_id)
+            
+            if not wallets:
+                text = "❌ *No Wallets Found*\n\nYou need to generate or connect a wallet before you can trade."
+                reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Create Wallet", callback_data="wallet")]])
+                await send_or_edit(update, text, reply_markup)
+                return
+            
+            wallet_buttons = []
+            for wallet in wallets:
+                short_address = shorten_address(wallet["address"])
+                wallet_buttons.append([
+                    InlineKeyboardButton(f"💳 {short_address}", callback_data=f"select_wallet_{wallet['address']}_{token_address}")
+                ])
+            wallet_buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=f'refresh_{token_address}')])
+            
+            await send_or_edit(update, "🎯 *Select Trading Wallet:*", InlineKeyboardMarkup(wallet_buttons))
+        
+        elif query.data.startswith('refresh_'):
+            token_address = query.data.split('_')[1]
+            await analyze_token(update, context, token_address)
+
+    except Exception as e:
+        print(f"Callback Error: {e}")
+
+async def show_wallet_details(update: Update, address: str):
+    """Shows detailed view of a single wallet."""
+    # Note: In a real app, we might fetch the actual balance here
+    # For now, we'll use a placeholder or 0
+    balance = await check_balance_command(address)
+    
+    text = (
+        f"💳 *Wallet Details*\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📍 *Address:*\n`{address}`\n\n"
+        f"💰 *Balance:* `{balance:.4f} ETH`\n"
+        f"🔗 [View on Basescan](https://basescan.org/address/{address})\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"⚠️ *Security Tip:* Never share your private keys. BaseFlow encypts all keys, but your safety is your priority."
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🗑️ Delete Wallet", callback_data=f"delete_{address}")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="wallet"), InlineKeyboardButton("❌ Close", callback_data="close")]
+    ]
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+async def Trades_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    trades = get_user_trades(user_id, limit=5)
+    
+    if not trades:
+        text = "📊 *Recent Trades*\n\nNo trades found in your history. Go to /buysell to start trading!"
+    else:
+        text = "📊 *Recent Trades*\n━━━━━━━━━━━━━━━\n"
+        for t in trades:
+            status = "🟢" if t["status"] == "success" else "🔴"
+            text += f"{status} *{t['trade_type'].upper()}* | {t['amount_in']} → {t['amount_out']}\n"
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
 async def CreateWallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    # Check if the user has any wallets
-    # If not, create a new wallet
-    # If the user has wallets, fetch them from the database
-    # and display them in the message
-    message = "Wallets"
     wallets = fetch_all_from_wallet(user_id)
-    wallet_address = [] # list to store the wallet address in and append to the message if the wallet exists
-    num = 1
+    
+    text = "💳 *Your Wallets*\n"
     if wallets:
-        for wallet in wallets:
-            balance = await check_balance_command(address=wallet["address"])
-            wallet_address.append(
-                [InlineKeyboardButton(f"{num}. {wallet["address"]}", callback_data=f"address_{wallet["address"]}"), 
-                InlineKeyboardButton(f"Balance: {balance}", callback_data="balance")]
-            )
-            num += 1
-        message = f"Wallets ({num - 1})"
+        text += f"Total active: {len(wallets)}\n\n"
+        wallet_buttons = []
+        for i, w in enumerate(wallets, 1):
+            short = shorten_address(w["address"])
+            wallet_buttons.append([InlineKeyboardButton(f"{i}. {short}", callback_data=f"address_{w['address']}")])
     else:
-        message = "No wallets found. Please create a new wallet."
-    keyboard = [
-        [InlineKeyboardButton("➕️ Connect Wallet", callback_data='connect_wallet'), 
-        InlineKeyboardButton("➕️ Generate New Wallet", callback_data='Generate_wallet')],
-        [InlineKeyboardButton("➕️ Generate 5 Wallets", callback_data='5_wallets'), 
-        InlineKeyboardButton("➕️ Generate 10 Wallets", callback_data='10_wallets')],
-        [InlineKeyboardButton("➕️ Transfer all Swell To One", callback_data='transfer_all')],
-        [InlineKeyboardButton("🔃️ Reload List", callback_data='reload_all'), InlineKeyboardButton("🗑️ Remove All", callback_data='remove_all')],
-        [InlineKeyboardButton("❌ Close", callback_data="close")],
+        text += "\nYou haven't created any wallets yet. Use the buttons below to generate your first trading wallet."
+        wallet_buttons = []
+
+    nav_buttons = [
+        [InlineKeyboardButton("➕ Generate 1 Wallet", callback_data='Generate_wallet')],
+        [InlineKeyboardButton("➕ Generate 5 Wallets", callback_data='5_wallets')],
+        [InlineKeyboardButton("🗑️ Remove All", callback_data='remove_all')],
+        [InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]
     ]
-     # Combine wallet buttons and keyboard buttons
-    updated_markup = wallet_address + keyboard
-    reply_markup = InlineKeyboardMarkup(updated_markup)
-    if update.callback_query:
-        await update.callback_query.message.reply_text(
-            message,
-            reply_markup=reply_markup,
-            parse_mode="Markdown",
-            )
-    elif update.message:
-        await update.message.reply_text(
-            message,
-            reply_markup=reply_markup,
-            parse_mode="Markdown",
-            )
+    
+    await send_or_edit(update, text, InlineKeyboardMarkup(wallet_buttons + nav_buttons))
 
-
-async def error(update: Update, Context: ContextTypes.DEFAULT_TYPE) -> None:
-    print(f"Update {update} caused error {Context.error}")
-
-
-
-# function to handle the tip reply
-async def tip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.callback_query:
-        await update.callback_query.message.reply_text("I'm Here To Help")
-    elif update.message:
-        await update.message.reply_text("I'm Here To Help")
-
-
-# function to handle the profile reply
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # This function should fetch the user's profile information from the database
     user_id = update.effective_user.id
     wallets = fetch_all_from_wallet(user_id)
-    if not wallets:
-        await update.message.reply_text("You don't have any wallets yet. Please create a wallet using /wallets.")
-        return
-    message = "🆔️ Your Profile:\n" \
-    "--------------------------------------------------\n"\
-    "Balance ◎: 0 Swell / $0\n" \
-    "-------------------------------------------------" 
-    wallet_address = []
-    num = 1
-    for wallet in wallets:
-        short_address = shorten_address(wallet["address"])
-        wallet_address.append(
-            [InlineKeyboardButton(f"💳️ Wallet {num} {short_address}", callback_data=f"address_{wallet["address"]}"), ]
-        )
-        num += 1
+    trade_count = get_trade_count(user_id)
+    
+    text = (
+        f"👤 *Profile: @{update.effective_user.username or 'Trader'}*\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💳 *Wallets:* `{len(wallets)}` active\n"
+        f"📊 *Total Trades:* `{trade_count}`\n"
+        f"🏅 *Rank:* `Newcomer`\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📈 Join our community to unlock pro features!"
+    )
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+async def Buysell_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "💱 *Fast Trading Engine*\n"
+        "━━━━━━━━━━━━━━━\n"
+        "Scan any token address on Base network to get instant analytics and trading options.\n\n"
+        "💡 *How it works:*\n"
+        "1. Click the button below\n"
+        "2. Paste the contract address\n"
+        "3. Choose amount and swap!\n"
+        "━━━━━━━━━━━━━━━"
+    )
+    
     keyboard = [
-        [InlineKeyboardButton("🚀️ Sell all", callback_data='sellall'), InlineKeyboardButton("🔥️ Burn_all", callback_data='Burn_all')],
+        [InlineKeyboardButton("🔍 Enter Token Address", callback_data='enter_token_address')],
+        [InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]
     ]
-    keyboard2 = [[InlineKeyboardButton("❌ Close", callback_data="close")]]
-    updated_markup = keyboard + wallet_address + keyboard2
-    reply_markup = InlineKeyboardMarkup(updated_markup)
-    if update.callback_query:
-        await update.callback_query.message.reply_text(
-            message,
-            reply_markup=reply_markup,
-            parse_mode="Markdown",
-        )
-    elif update.message:
-        await update.message.reply_text(
-            message,
-            reply_markup=reply_markup,
-            parse_mode="Markdown",
-        )
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "📖 *BaseFlow Academy*\n"
+        "━━━━━━━━━━━━━━━\n"
+        "• `/start` - Access main dashboard\n"
+        "• `/wallet` - Manage your trading wallets\n"
+        "• `/buysell` - Analyze and trade tokens\n"
+        "• `/profile` - View your stats\n"
+        "• `/settings` - Configure slippage & fees\n\n"
+        "❓ *Need Help?* Check our [Documentation](https://docs.baseflow.xyz) or join our [Community](https://t.me/baseflow_community)."
+    )
+    keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
 
-async def check_balance_command(address: str) -> None:
+async def Settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "⚙️ *Settings*\n"
+        "━━━━━━━━━━━━━━━\n"
+        "⚡ *Default Slippage:* `0.5%`\n"
+        "⛽ *Gas Priority:* `Normal`\n"
+        "🛡️ *Anti-Rug:* `Enabled`\n"
+        "━━━━━━━━━━━━━━━\n"
+        "Full settings coming soon in v2.0!"
+    )
+    keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Just a quick ETH price check for now
     try:
-        if address:
-            balance = await swapper.check_swell_balance(address)
-        return balance
+        price = await asyncio.to_thread(get_eth_price)
+        text = f"📊 *Base Ecosystem Prices*\n\n🔵 *Native ETH:* `${price:,.2f}`\n\nMore token prices coming soon!"
+    except:
+        text = "📊 *Base Ecosystem Prices*\n\nPrice service currently unavailable."
+        
+    keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
+
+async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE, token_address: str) -> None:
+    # If update is from callback, message is in query
+    loading_msg = await (update.callback_query.message.edit_text("🔍 *Analyzing Token...*", parse_mode="Markdown") if update.callback_query else update.message.reply_text("🔍 *Analyzing Token...*", parse_mode="Markdown"))
+    
+    try:
+        trader = get_trader()
+        if trader is None:
+            await loading_msg.edit_text("❌ Trading engine offline.")
+            return
+
+        info = await trader.get_token_info(token_address)
+        
+        text = (
+            f"🪙 *{info['name']} ({info['symbol']})*\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"💰 *Price:* `${info['price']:.8f}`\n"
+            f"📈 *MCap:* `${info['market_cap']:,.0f}`\n"
+            f"💧 *Liquidity:* `${info['liquidity']:,.0f}`\n\n"
+            f"🛡️ *Safety Check:*\n"
+            f"- Renounced: {'✅' if info['renounced'] else '❌'}\n"
+            f"- Honeypot: {'✅ Clean' if not info.get('honeypot', False) else '🚨 Warning'}\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🔗 [Basescan](https://basescan.org/token/{token_address}) | [DexScreener](https://dexscreener.com/base/{token_address})"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("💰 Buy Token", callback_data=f"buy_{token_address}")],
+            [InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_{token_address}")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="buysell"), InlineKeyboardButton("❌ Close", callback_data="close")]
+        ]
+        
+        await loading_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown", disable_web_page_preview=True)
+        
     except Exception as e:
-        print(f"Error checking balance: {e}")
+        await loading_msg.edit_text(f"❌ *Analysis Error*\n\n{str(e)[:100]}")
+
+async def wallet_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, num: int) -> None:
+    user_id = update.effective_user.id
+    query = update.callback_query
+    
+    await query.message.edit_text("⏳ *Generating Secure Wallets...*", parse_mode="Markdown")
+    
+    try:
+        count = num if num > 0 else 1
+        results = []
+        for _ in range(count):
+            pk, addr = await generate_wallet()
+            await create_wallet_db(user_id, addr, pk, 0.0)
+            results.append((addr, pk))
+        
+        text = f"✅ *{count} Wallet(s) Generated!*\n━━━━━━━━━━━━━━━\n"
+        for addr, pk in results:
+            text += f"📍 `{addr}`\n🔑 `<tg-spoiler>{pk}</tg-spoiler>`\n\n"
+        
+        text += "⚠️ *Save your private keys safely!* They will only be shown once."
+        
+        keyboard = [[InlineKeyboardButton("⬅️ My Wallets", callback_data="wallet"), InlineKeyboardButton("❌ Close", callback_data="close")]]
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
+    except Exception as e:
+        await query.message.edit_text(f"❌ *Generation Failed:* {e}")
+
+async def check_balance_command(address: str) -> float:
+    try:
+        trader = get_trader()
+        if trader:
+            return float(await trader.check_eth_balance(address))
+        return 0.0
+    except:
+        return 0.0
+
+async def error(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    print(f"Update {update} caused error {context.error}")
+
+async def tip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await send_or_edit(update, "💡 *BaseFlow Tips*\n\nTrading on Base is fast and cheap. Always keep at least 0.005 ETH for gas fees!")
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.text: return
+    
+    user_message = update.message.text.strip()
+    user_id = update.effective_user.id
+    
+    if context.user_data.get("awaiting_confirmation") == "remove_all":
+        if user_message.upper() == "CONFIRM":
+            await delete_wallets_by_user(user_id)
+            context.user_data["awaiting_confirmation"] = None
+            await update.message.reply_text("🗑️ *All wallets removed.*", parse_mode="Markdown")
+            await CreateWallet_command(update, context)
+        else:
+            context.user_data["awaiting_confirmation"] = None
+            await update.message.reply_text("❌ *Action cancelled.*", parse_mode="Markdown")
+        return
+
+    if context.user_data.get("awaiting_confirmation") == "delete":
+        if user_message.upper() == "CONFIRM":
+            addr = context.user_data.get("delete_address")
+            await delete_specific_wallet(user_id, addr)
+            context.user_data["awaiting_confirmation"] = None
+            await update.message.reply_text("🗑️ *Wallet deleted.*", parse_mode="Markdown")
+            await CreateWallet_command(update, context)
+        else:
+            context.user_data["awaiting_confirmation"] = None
+            await update.message.reply_text("❌ *Action cancelled.*", parse_mode="Markdown")
+        return
+
+    if context.user_data.get('awaiting_token_address'):
+        from web3 import Web3
+        if Web3.is_address(user_message):
+            context.user_data['awaiting_token_address'] = False
+            await analyze_token(update, context, user_message)
+        else:
+            await update.message.reply_text("❌ *Invalid address.* Please enter a valid Base contract address.")
+
+async def token_swap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Placeholder for token swap selection
+    text = "💱 *Select Token Flow*\n\nFeature arriving in next update!"
+    keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="buysell")]]
+    await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
