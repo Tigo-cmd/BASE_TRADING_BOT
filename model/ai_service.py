@@ -1,3 +1,7 @@
+import warnings
+# Silence the deprecation warning for the old SDK - must be before import
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import os
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -10,7 +14,8 @@ class AIService:
         api_key = os.getenv("GEMINI_API_KEY")
         if api_key:
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-pro')
+            # Use the newer model name (gemini-pro is deprecated)
+            self.model = genai.GenerativeModel('gemini-3-flash-preview')
             self.is_active = True
         else:
             print("⚠️ AIService: GEMINI_API_KEY not found in .env")
