@@ -1,5 +1,5 @@
 # BaseFlow (DEBASE_Bot)
-<a href="https://t.me/+jNYLaVDd7lpjODJk" target="_blank">Join our Telegram Channel</a>
+<a href="https://t.me/+jNYLaVDd7lpjODJk" target="_blank">Join our Telegram Channel</a> <br>
 <a href="https://t.me/de_base_bot" target="_blank">Start Trading now</a>
 
 **Telegram-first trading infrastructure for Base launchpad assets**
