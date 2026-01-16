@@ -117,6 +117,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             InlineKeyboardButton("⚙️ Settings", callback_data='settings'),
             InlineKeyboardButton("📖 Help", callback_data='help')
         ],
+        [InlineKeyboardButton("📢 Join Community", url="https://t.me/+jNYLaVDd7lpjODJk")],
         [
             InlineKeyboardButton("❌ Close Menu", callback_data="close")
         ],
@@ -448,10 +449,12 @@ async def execute_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, wallet
             keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
             await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         else:
-            await query.message.edit_text(f"❌ *Swap Failed:* {result.get('error', 'Unknown Error')}")
+            print(f"Swap Failed: {result.get('error')}")
+            await query.message.edit_text("❌ *Swap Failed:* We couldn't complete the purchase. This could be due to gas issues or price movement.")
             
     except Exception as e:
-        await query.message.edit_text(f"❌ *Execution Error:* {str(e)[:200]}")
+        print(f"ERROR in execute_buy: {e}")
+        await query.message.edit_text("❌ *Execution Error:* An unexpected error occurred while processing your buy. Please try again later.")
 
 async def execute_sell(update: Update, context: ContextTypes.DEFAULT_TYPE, wallet_addr: str, token_addr: str, amount: str):
     """Executes the actual sell transaction."""
@@ -491,10 +494,12 @@ async def execute_sell(update: Update, context: ContextTypes.DEFAULT_TYPE, walle
             keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
             await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         else:
-            await query.message.edit_text(f"❌ *Sell Failed:* {result.get('error', 'Unknown Error')}")
+            print(f"Sell Failed: {result.get('error')}")
+            await query.message.edit_text("❌ *Sell Failed:* We couldn't complete the sale. This could be due to low liquidity or extreme volatility.")
             
     except Exception as e:
-        await query.message.edit_text(f"❌ *Execution Error:* {str(e)[:200]}")
+        print(f"ERROR in execute_sell: {e}")
+        await query.message.edit_text("❌ *Execution Error:* An unexpected error occurred while processing your sell. Please try again later.")
 
 async def show_wallet_details(update: Update, address: str):
     """Shows detailed view of a single wallet."""
@@ -731,7 +736,8 @@ async def analyze_token(update: Update, context: ContextTypes.DEFAULT_TYPE, toke
         await loading_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown", disable_web_page_preview=True)
         
     except Exception as e:
-        await loading_msg.edit_text(f"❌ *Analysis Error*\n\n{str(e)[:100]}")
+        print(f"ERROR in analyze_token: {e}")
+        await loading_msg.edit_text("❌ *Analysis Error*\n\nWe couldn't analyze this token. It might be an invalid address or the network is congested.")
 
 
 async def wallet_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, num: int) -> None:
@@ -758,7 +764,8 @@ async def wallet_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         
     except Exception as e:
-        await query.message.edit_text(f"❌ *Generation Failed:* {e}")
+        print(f"ERROR in wallet_callback_handler: {e}")
+        await query.message.edit_text("❌ *Generation Failed:* We encountered an error while generating your wallets. Please try again.")
 
 async def check_balance_command(address: str) -> float:
     try:
@@ -973,7 +980,8 @@ async def AI_scan_trends_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         
     except Exception as e:
-        await query.message.edit_text(f"❌ Trend Scan Error: {str(e)}")
+        print(f"ERROR in AI_scan_trends: {e}")
+        await query.message.edit_text("❌ *Trend Scan Error:* AI service encountered an issue. Please try again shortly.")
 
 async def AI_security_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE, token_address: str) -> None:
     """Runs a dedicated AI security scan for a token."""
@@ -1008,4 +1016,5 @@ async def AI_security_analysis_command(update: Update, context: ContextTypes.DEF
         await loading_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         
     except Exception as e:
-        await loading_msg.edit_text(f"❌ AI Scan Error: {str(e)}")
+        print(f"ERROR: {e}")
+        await loading_msg.edit_text("❌ *AI Scan Error:* AI scan failed. Check logs.")

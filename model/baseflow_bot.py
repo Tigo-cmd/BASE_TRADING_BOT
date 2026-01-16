@@ -48,27 +48,65 @@ init_db()  # Initialize the database when the script runs
 
 # BaseFlow Telegram Bot Token
 TELEGRAM_TOKEN = os.getenv('BASEFLOW_BOT_API')
+ALERTS_CHANNEL = os.getenv('BASEFLOW_ALERTS_CHANNEL') # e.g. @BaseFlowAlerts or -100...
 TOKEN: Final = TELEGRAM_TOKEN
 
-    exit(1)
+# Global reference to Application (for background tasks to use the bot)
+_bot_app = None
+
+if not TOKEN:
+    print("❌ Error: BASEFLOW_BOT_API not found in .env file!")
+    print("Please make sure your .env file contains: BASEFLOW_BOT_API=your_bot_token")
+    import sys
+    sys.exit(1)
 
 async def monitor_callback(token_address, pool_address):
     """
     Called by the monitor when a new pool is detected.
+    Broadcasts the alert to the community channel.
     """
-    from store_to_db import save_ai_signal, get_ai_service
-    # Broadcast to registered users (simplified for beta)
-    # In a real app, we would query users who enabled 'listing_alerts'
+    from store_to_db import save_ai_signal
+    from utils import shorten_address
+    
     print(f"🚀 New Pool Detected: {token_address} at {pool_address}")
     
-    # We could also trigger an automatic AI analysis here
-    # and save it to the DB so users can see it in their dashboard.
+    # Save to DB for the dashboard
     await save_ai_signal(token_address, "listing", f"New pool detected at {pool_address}")
+    
+    # Send to Community Channel
+    if ALERTS_CHANNEL and _bot_app:
+        try:
+            from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+            
+            text = (
+                "🚀 *New Base Listing Detected!* 🚀\n"
+                "━━━━━━━━━━━━━━━\n"
+                f"🪙 *Token:* `{token_address}`\n"
+                f"💧 *Pool:* `{pool_address}`\n\n"
+                "🔍 *Quick Actions:*\n"
+                "• [Basescan](https://basescan.org/token/" + token_address + ")\n"
+                "• [DexScreener](https://dexscreener.com/base/" + token_address + ")\n"
+                "━━━━━━━━━━━━━━━\n"
+                "🤖 *Analyze instantly in @de_base_bot*"
+            )
+            
+            await _bot_app.bot.send_message(
+                chat_id=ALERTS_CHANNEL,
+                text=text,
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
+            print(f"📢 Alert sent to channel {ALERTS_CHANNEL}")
+        except Exception as e:
+            print(f"❌ Failed to send alert to channel: {e}")
 
 async def post_init(application: Application):
     """
     Setup background tasks after bot initialization.
     """
+    global _bot_app
+    _bot_app = application
+    
     from monitor import get_monitor
     monitor = get_monitor()
     asyncio.create_task(monitor.watch_new_pools(monitor_callback))
