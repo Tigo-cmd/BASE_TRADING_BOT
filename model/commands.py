@@ -90,7 +90,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"• Lightning Fast Swaps\n"
         f"• Copy Trading & Referrals (NEW!)\n"
         f"• On-chain Attribution\n\n"
-        f"🔗 [Website](https://base-trading-bot.vercel.app) | [Docs](https://docs.baseflow.xyz) | [Twitter](https://x.com/baseflow)\n\n"
+        f"🔗 [Website](https://base-trading-bot.vercel.app) | [Docs](https://debase-bot.gitbook.io/debase_bot/) | [Twitter](https://x.com/baseflow)\n\n"
         f"👇 *Select an option below to get started:*"
     )
 
@@ -624,7 +624,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• `/buysell` - Analyze and trade tokens\n"
         "• `/profile` - View your stats\n"
         "• `/settings` - Configure slippage & fees\n\n"
-        "❓ *Need Help?* Check our [Documentation](https://docs.baseflow.xyz) or join our [Community](https://t.me/baseflow_community)."
+        "❓ *Need Help?* Check our [Documentation](https://debase-bot.gitbook.io/debase_bot/) or join our [Community](https://t.me/+jNYLaVDd7lpjODJk)."
     )
     keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
     await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
