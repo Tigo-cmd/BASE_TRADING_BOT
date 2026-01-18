@@ -35,15 +35,25 @@ QUOTER_ABI = json.loads('''[{"inputs":[{"components":[{"name":"tokenIn","type":"
 
 BASEFLOW_ROUTER_ABI = json.loads('''[{"inputs":[{"name":"tokenOut","type":"address"},{"name":"amountOutMin","type":"uint256"},{"name":"deadline","type":"uint256"}],"name":"swapETHForTokens","outputs":[{"name":"amountOut","type":"uint256"}],"stateMutability":"payable","type":"function"},{"inputs":[{"name":"tokenIn","type":"address"},{"name":"amountIn","type":"uint256"},{"name":"amountOutMin","type":"uint256"},{"name":"deadline","type":"uint256"}],"name":"swapTokensForETH","outputs":[{"name":"amountOut","type":"uint256"}],"stateMutability":"nonpayable","type":"function"}]''')
 
+# Uniswap V3 SwapRouter ABI (for exactInputSingle)
+UNISWAP_V3_ROUTER_ABI = json.loads('''[{"inputs":[{"components":[{"name":"tokenIn","type":"address"},{"name":"tokenOut","type":"address"},{"name":"fee","type":"uint24"},{"name":"recipient","type":"address"},{"name":"deadline","type":"uint256"},{"name":"amountIn","type":"uint256"},{"name":"amountOutMinimum","type":"uint256"},{"name":"sqrtPriceLimitX96","type":"uint160"}],"name":"params","type":"tuple"}],"name":"exactInputSingle","outputs":[{"name":"amountOut","type":"uint256"}],"stateMutability":"payable","type":"function"}]''')
+
 class BaseFlowTrader:
     def __init__(self):
         self.w3 = Web3(Web3.HTTPProvider(BASE_RPC_URL))
         self.WETH = Web3.to_checksum_address(TOKENS["WETH"])
         self.router_address = BASEFLOW_ROUTER_ADDRESS
+        
+        # Try custom router first, fall back to Uniswap V3 SwapRouter
         if self.router_address != '0x0000000000000000000000000000000000000000':
             self.router = self.w3.eth.contract(address=Web3.to_checksum_address(self.router_address), abi=BASEFLOW_ROUTER_ABI)
+            self.use_uniswap_direct = False
         else:
-            self.router = None
+            # Use Uniswap V3 SwapRouter directly
+            self.router_address = UNISWAP_V3_ROUTER
+            self.router = self.w3.eth.contract(address=Web3.to_checksum_address(UNISWAP_V3_ROUTER), abi=UNISWAP_V3_ROUTER_ABI)
+            self.use_uniswap_direct = True
+            print("ℹ️ Using Uniswap V3 SwapRouter for trades")
             
         self.quoter = self.w3.eth.contract(address=Web3.to_checksum_address(UNISWAP_V3_QUOTER), abi=QUOTER_ABI)
 
@@ -132,10 +142,33 @@ class BaseFlowTrader:
             d_out = c_out.functions.decimals().call()
             min_out = int(quote * (Decimal(1) - slippage/100) * Decimal(10**d_out))
             
-            tx = self.router.functions.swapETHForTokens(Web3.to_checksum_address(token_out), min_out, int(time.time())+300).build_transaction({
-                "from": wallet, "nonce": self.w3.eth.get_transaction_count(wallet), "value": Web3.to_wei(amount_eth, 'ether'),
-                "gas": 400000, "gasPrice": self.w3.eth.gas_price, "chainId": BASE_CHAIN_ID
-            })
+            if self.use_uniswap_direct:
+                # Use Uniswap V3 SwapRouter exactInputSingle
+                params = (
+                    self.WETH,  # tokenIn (WETH)
+                    Web3.to_checksum_address(token_out),  # tokenOut
+                    3000,  # fee (0.3%)
+                    Web3.to_checksum_address(wallet),  # recipient
+                    int(time.time()) + 300,  # deadline
+                    Web3.to_wei(amount_eth, 'ether'),  # amountIn
+                    min_out,  # amountOutMinimum
+                    0  # sqrtPriceLimitX96 (0 = no limit)
+                )
+                tx = self.router.functions.exactInputSingle(params).build_transaction({
+                    "from": wallet, 
+                    "nonce": self.w3.eth.get_transaction_count(wallet), 
+                    "value": Web3.to_wei(amount_eth, 'ether'),
+                    "gas": 350000, 
+                    "gasPrice": self.w3.eth.gas_price, 
+                    "chainId": BASE_CHAIN_ID
+                })
+            else:
+                # Use custom BaseFlow router
+                tx = self.router.functions.swapETHForTokens(Web3.to_checksum_address(token_out), min_out, int(time.time())+300).build_transaction({
+                    "from": wallet, "nonce": self.w3.eth.get_transaction_count(wallet), "value": Web3.to_wei(amount_eth, 'ether'),
+                    "gas": 400000, "gasPrice": self.w3.eth.gas_price, "chainId": BASE_CHAIN_ID
+                })
+            
             signed = self.w3.eth.account.sign_transaction(tx, key)
             h = self.w3.eth.send_raw_transaction(signed.raw_transaction)
             r = self.w3.eth.wait_for_transaction_receipt(h)
@@ -145,6 +178,7 @@ class BaseFlowTrader:
                 await update_volume_tracking(token_out, float(amount_eth))
             return {"success": r.status == 1, "tx_hash": h.hex()}
         except Exception as e: return {"success": False, "error": str(e)}
+
 
     async def swap_tokens_for_eth(self, token_in, wallet, key, amount_token, slippage=Decimal("0.5"), user_id=None):
         if not self.router: return {"success": False, "error": "Router not set"}

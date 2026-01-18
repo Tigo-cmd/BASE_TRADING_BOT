@@ -271,11 +271,34 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif query.data == "swap_tokens":
             await token_swap(update, context)
         
+        elif query.data.startswith('buy_amt_'):
+            print(f"DEBUG: buy_amt_ triggered with data: {query.data}")
+            amount = query.data.split('_')[2]
+            wallet_addr = context.user_data.get('trade_wallet')
+            token_addr = context.user_data.get('trade_token')
+            print(f"DEBUG: amount={amount}, wallet={wallet_addr}, token={token_addr}")
+            
+            if not wallet_addr or not token_addr:
+                await query.message.edit_text("❌ *Session Expired.* Please start over by clicking Buy Token again.", parse_mode="Markdown")
+                return
+            
+            if amount == "custom":
+                text = "⌨️ *Enter Custom Amount (ETH):*"
+                context.user_data['awaiting_config'] = "buy_custom_amount"
+                await send_or_edit(update, text, InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"sel_buy_wal_{wallet_addr}")]]))
+                return
+
+            await execute_buy(update, context, wallet_addr, token_addr, amount)
+            return
+
         elif query.data.startswith('buy_'):
             # This is the initial "Buy Token" click from analyze_token
             token_address = query.data.split('_')[1]
             user_id = update.effective_user.id
             wallets = fetch_all_from_wallet(user_id)
+            
+            # Save context for next steps
+            context.user_data['trade_token'] = token_address
             
             if not wallets:
                 text = "❌ *No Wallets Found*\n\nYou need to generate or connect a wallet before you can trade."
@@ -287,7 +310,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             for wallet in wallets:
                 short_address = shorten_address(wallet["address"])
                 wallet_buttons.append([
-                    InlineKeyboardButton(f"💳 {short_address}", callback_data=f"select_wallet_{wallet['address']}_{token_address}")
+                    InlineKeyboardButton(f"💳 {short_address}", callback_data=f"sel_buy_wal_{wallet['address']}")
                 ])
             wallet_buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=f'refresh_{token_address}')])
             
@@ -329,50 +352,44 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data["awaiting_config"] = "auto_sell_tp"
             await send_or_edit(update, text, InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="settings")]]))
 
-        elif query.data.startswith('select_wallet_'):
-            # Data format: select_wallet_{address}_{token_address}
-            parts = query.data.split('_')
-            wallet_address = parts[2]
-            token_address = parts[3]
+        elif query.data.startswith('sel_buy_wal_'):
+            wallet_address = query.data.split('_')[3]
+            token_address = context.user_data.get('trade_token')
+            context.user_data['trade_wallet'] = wallet_address
             
-            # Show amount selection keyboard
+            if not token_address:
+                await query.message.edit_text("❌ *Session Expired.* Please re-analyze the token.")
+                return
+
             text = (
-                f"🎯 *Wallet Selected:* `{wallet_address[:8]}...{wallet_address[-6:]}`\n"
-                f"🪙 *Token:* `{token_address[:8]}...{token_address[-6:]}`\n\n"
+                f"🎯 *Wallet Selected:* `{shorten_address(wallet_address)}`\n"
+                f"🪙 *Token:* `{shorten_address(token_address)}`\n\n"
                 f"💰 *Select Purchase Amount:* "
             )
             keyboard = [
                 [
-                    InlineKeyboardButton("0.01 ETH", callback_data=f"buy_amt_{wallet_address}_{token_address}_0.01"),
-                    InlineKeyboardButton("0.05 ETH", callback_data=f"buy_amt_{wallet_address}_{token_address}_0.05")
+                    InlineKeyboardButton("0.01 ETH", callback_data="buy_amt_0.01"),
+                    InlineKeyboardButton("0.05 ETH", callback_data="buy_amt_0.05")
                 ],
                 [
-                    InlineKeyboardButton("0.1 ETH", callback_data=f"buy_amt_{wallet_address}_{token_address}_0.1"),
-                    InlineKeyboardButton("0.5 ETH", callback_data=f"buy_amt_{wallet_address}_{token_address}_0.5")
+                    InlineKeyboardButton("0.1 ETH", callback_data="buy_amt_0.1"),
+                    InlineKeyboardButton("0.5 ETH", callback_data="buy_amt_0.5")
                 ],
                 [
-                    InlineKeyboardButton("1.0 ETH", callback_data=f"buy_amt_{wallet_address}_{token_address}_1.0"),
-                    InlineKeyboardButton("⌨️ Custom", callback_data=f"buy_amt_custom_{wallet_address}_{token_address}")
+                    InlineKeyboardButton("1.0 ETH", callback_data="buy_amt_1.0"),
+                    InlineKeyboardButton("⌨️ Custom", callback_data="buy_amt_custom")
                 ],
                 [InlineKeyboardButton("⬅️ Back to Wallets", callback_data=f"buy_{token_address}")]
             ]
             await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
 
-        elif query.data.startswith('buy_amt_'):
-            # Data format: buy_amt_{wallet}_{token}_{amount}
-            parts = query.data.split('_')
-            wallet_addr = parts[2]
-            token_addr = parts[3]
-            amount = parts[4]
-            
-            await execute_buy(update, context, wallet_addr, token_addr, amount)
 
         elif query.data.startswith('sell_init_'):
             token_addr = query.data.split('_')[2]
+            context.user_data['trade_token'] = token_addr
             user_id = update.effective_user.id
             wallets = fetch_all_from_wallet(user_id)
             
-            # Find wallets that have this token
             held_wallets = []
             trader = get_trader()
             for w in wallets:
@@ -388,32 +405,39 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             wallet_buttons = []
             for addr, bal in held_wallets:
                 short = shorten_address(addr)
-                wallet_buttons.append([InlineKeyboardButton(f"💳 {short} ({bal:.2f})", callback_data=f"sell_wallet_{addr}_{token_addr}_{bal}")])
+                wallet_buttons.append([InlineKeyboardButton(f"💳 {short} ({bal:.2f})", callback_data=f"sel_sell_wal_{addr}")])
             
             wallet_buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=f"refresh_{token_addr}")])
             await send_or_edit(update, text, InlineKeyboardMarkup(wallet_buttons))
 
-        elif query.data.startswith('sell_wallet_'):
-            # sell_wallet_{addr}_{token}_{bal}
-            parts = query.data.split('_')
-            addr, token, bal = parts[2], parts[3], parts[4]
+        elif query.data.startswith('sel_sell_wal_'):
+            addr = query.data.split('_')[3]
+            token = context.user_data.get('trade_token')
+            context.user_data['trade_wallet'] = addr
+            
+            trader = get_trader()
+            bal = await trader.check_token_balance(token, addr)
+            context.user_data['trade_bal'] = str(bal)
             
             text = f"🚀 *Sell Token*\n\nWallet: `{shorten_address(addr)}`\nBalance: `{bal}`\n\nSelect amount to sell:"
             keyboard = [
                 [
-                    InlineKeyboardButton("25%", callback_data=f"sell_exec_{addr}_{token}_{float(bal)*0.25}"),
-                    InlineKeyboardButton("50%", callback_data=f"sell_exec_{addr}_{token}_{float(bal)*0.5}"),
-                    InlineKeyboardButton("100%", callback_data=f"sell_exec_{addr}_{token}_{bal}")
+                    InlineKeyboardButton("25%", callback_data="sell_p_25"),
+                    InlineKeyboardButton("50%", callback_data="sell_p_50"),
+                    InlineKeyboardButton("100%", callback_data="sell_p_100")
                 ],
                 [InlineKeyboardButton("⬅️ Back", callback_data=f"sell_init_{token}")]
             ]
             await send_or_edit(update, text, InlineKeyboardMarkup(keyboard))
 
-        elif query.data.startswith('sell_exec_'):
-            # sell_exec_{addr}_{token}_{amt}
-            parts = query.data.split('_')
-            addr, token, amt = parts[2], parts[3], parts[4]
-            await execute_sell(update, context, addr, token, amt)
+        elif query.data.startswith('sell_p_'):
+            percent = int(query.data.split('_')[2])
+            addr = context.user_data.get('trade_wallet')
+            token = context.user_data.get('trade_token')
+            bal = float(context.user_data.get('trade_bal', 0))
+            
+            amt = bal * (percent / 100)
+            await execute_sell(update, context, addr, token, str(amt))
 
         elif query.data.startswith('refresh_'):
             token_address = query.data.split('_')[1]
@@ -428,22 +452,32 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def execute_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, wallet_addr: str, token_addr: str, amount: str):
     """Executes the actual buy transaction."""
-    query = update.callback_query
     user_id = update.effective_user.id
     
-    await query.message.edit_text(
-        f"⏳ *Sending Transaction...*\n\nBuying `{amount} ETH` worth of token `{token_addr[:10]}...`",
-        parse_mode="Markdown"
-    )
+    # Handle both callback query and direct message contexts
+    if update.callback_query:
+        status_msg = await update.callback_query.message.edit_text(
+            f"⏳ *Sending Transaction...*\n\nBuying `{amount} ETH` worth of token `{token_addr[:10]}...`",
+            parse_mode="Markdown"
+        )
+    else:
+        status_msg = await update.message.reply_text(
+            f"⏳ *Sending Transaction...*\n\nBuying `{amount} ETH` worth of token `{token_addr[:10]}...`",
+            parse_mode="Markdown"
+        )
     
     try:
         trader = get_trader()
+        if not trader or not trader.router:
+            await status_msg.edit_text("❌ *Error:* Trading engine not configured. Router contract not set.", parse_mode="Markdown")
+            return
+            
         # Find private key from DB
         wallets = fetch_all_from_wallet(user_id)
         pk = next((w["private_key"] for w in wallets if w["address"].lower() == wallet_addr.lower()), None)
         
         if not pk:
-            await query.message.edit_text("❌ *Error:* Could not find private key for this wallet.")
+            await status_msg.edit_text("❌ *Error:* Could not find private key for this wallet.", parse_mode="Markdown")
             return
 
         # Execute Swap
@@ -463,14 +497,15 @@ async def execute_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, wallet
                 f"━━━━━━━━━━━━━━━"
             )
             keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="start"), InlineKeyboardButton("❌ Close", callback_data="close")]]
-            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            await status_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         else:
             print(f"Swap Failed: {result.get('error')}")
-            await query.message.edit_text("❌ *Swap Failed:* We couldn't complete the purchase. This could be due to gas issues or price movement.")
+            await status_msg.edit_text("❌ *Swap Failed:* We couldn't complete the purchase. This could be due to gas issues or price movement.", parse_mode="Markdown")
             
     except Exception as e:
         print(f"ERROR in execute_buy: {e}")
-        await query.message.edit_text("❌ *Execution Error:* An unexpected error occurred while processing your buy. Please try again later.")
+        await status_msg.edit_text("❌ *Execution Error:* An unexpected error occurred while processing your buy. Please try again later.", parse_mode="Markdown")
+
 
 async def execute_sell(update: Update, context: ContextTypes.DEFAULT_TYPE, wallet_addr: str, token_addr: str, amount: str):
     """Executes the actual sell transaction."""
@@ -840,6 +875,17 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # === CONFIG UPDATES (Sprint 4) ===
     config_field = context.user_data.get("awaiting_config")
     if config_field:
+        if config_field == "buy_custom_amount":
+            try:
+                amt = float(user_message)
+                wallet_addr = context.user_data.get('trade_wallet')
+                token_addr = context.user_data.get('trade_token')
+                context.user_data["awaiting_config"] = None
+                await execute_buy(update, context, wallet_addr, token_addr, str(amt))
+            except ValueError:
+                await update.message.reply_text("❌ *Invalid amount.* Please enter a numeric value (e.g., 0.1).")
+            return
+
         try:
             val = float(user_message)
             await update_user_settings(user_id, **{config_field: val})
